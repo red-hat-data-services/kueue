@@ -1,0 +1,9 @@
+# Dev/testing friendly settings for Kueue.
+
+# Use default settings as a base.
+resources:
+- rhoai
+
+patches:
+# Modify logging for better user experience. 
+- path: binding_admin_roles.yaml
