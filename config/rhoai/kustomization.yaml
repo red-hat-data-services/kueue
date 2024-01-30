@@ -2,7 +2,7 @@
 
 # Use default settings as a base.
 resources:
-- rhoai
+- binding_admin_roles.yaml
 
 patches:
 # Modify logging for better user experience. 
