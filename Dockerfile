@@ -1,4 +1,4 @@
-ARG BUILDER_IMAGE=golang:1.21
+ARG BUILDER_IMAGE=golang:1.23
 ARG BASE_IMAGE=registry.access.redhat.com/ubi8/go-toolset:1.20.10
 # Build the manager binary
 FROM --platform=${BUILDPLATFORM} ${BUILDER_IMAGE} as builder
