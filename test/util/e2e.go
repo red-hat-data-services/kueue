@@ -59,6 +59,22 @@ const (
 	E2eTestAgnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85"
 )
 
+const (
+	// The environment variable for namespace where Kueue is installed
+	namespaceEnvVar = "NAMESPACE"
+
+	// The namespace where kueue is installed in opendatahub
+	odhNamespace = "opendatahub"
+
+	// The namespace where kueue is installed in rhoai
+	rhoaiNamespace = "redhat-ods-applications"
+
+	// The default namespace where kueue is installed
+	kueueNamespace = "kueue-system"
+
+	undefinedNamespace = "undefined"
+)
+
 func CreateClientUsingCluster(kContext string) (client.WithWatch, *rest.Config) {
 	cfg, err := config.GetConfigWithContext(kContext)
 	if err != nil {
@@ -173,7 +189,7 @@ func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, k
 	ginkgo.By(fmt.Sprintf("Waiting for availability of deployment: %q", key))
 	gomega.EventuallyWithOffset(2, func(g gomega.Gomega) error {
 		g.Expect(k8sClient.Get(ctx, key, deployment)).To(gomega.Succeed())
-		g.Expect(k8sClient.List(ctx, pods, client.InNamespace(key.Namespace), client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
+		g.Expect(k8sClient.List(ctx, pods, client.InNamespace(GetNamespace()), client.MatchingLabels(deployment.Spec.Selector.MatchLabels))).To(gomega.Succeed())
 		for _, pod := range pods.Items {
 			for _, cs := range pod.Status.ContainerStatuses {
 				// To make sure that we don't have restarts of controller-manager.
@@ -195,7 +211,7 @@ func waitForOperatorAvailability(ctx context.Context, k8sClient client.Client, k
 }
 
 func WaitForKueueAvailability(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-controller-manager"}
+	kcmKey := types.NamespacedName{Namespace: GetNamespace(), Name: "kueue-controller-manager"}
 	waitForOperatorAvailability(ctx, k8sClient, kcmKey)
 }
 
@@ -234,7 +250,7 @@ func WaitForKubeRayOperatorAvailability(ctx context.Context, k8sClient client.Cl
 
 func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *configapi.Configuration {
 	var kueueCfg configapi.Configuration
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-manager-config"}
+	kcmKey := types.NamespacedName{Namespace: GetNamespace(), Name: "kueue-manager-config"}
 	configMap := &corev1.ConfigMap{}
 
 	gomega.Expect(k8sClient.Get(ctx, kcmKey, configMap)).To(gomega.Succeed())
@@ -244,7 +260,7 @@ func GetKueueConfiguration(ctx context.Context, k8sClient client.Client) *config
 
 func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueueCfg *configapi.Configuration) {
 	configMap := &corev1.ConfigMap{}
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-manager-config"}
+	kcmKey := types.NamespacedName{Namespace: GetNamespace(), Name: "kueue-manager-config"}
 	config, err := yaml.Marshal(kueueCfg)
 
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
@@ -256,7 +272,7 @@ func ApplyKueueConfiguration(ctx context.Context, k8sClient client.Client, kueue
 }
 
 func RestartKueueController(ctx context.Context, k8sClient client.Client) {
-	kcmKey := types.NamespacedName{Namespace: "kueue-system", Name: "kueue-controller-manager"}
+	kcmKey := types.NamespacedName{Namespace: GetNamespace(), Name: "kueue-controller-manager"}
 	rolloutOperatorDeployment(ctx, k8sClient, kcmKey)
 }
 
@@ -315,4 +331,23 @@ func CreateNamespaceFromPrefixWithLog(ctx context.Context, k8sClient client.Clie
 	gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
 	ginkgo.GinkgoLogr.Info(fmt.Sprintf("Created namespace: %s", ns.Name))
 	return ns
+}
+func GetNamespace() string {
+	namespace, ok := os.LookupEnv(namespaceEnvVar)
+	if !ok {
+		fmt.Printf("Expected environment variable %s is unset, please use this environment variable to specify in which namespace Kueue is installed", namespaceEnvVar)
+		os.Exit(1)
+	}
+	switch namespace {
+	case "opendatahub":
+		return odhNamespace
+	case "redhat-ods-applications":
+		return rhoaiNamespace
+	case "kueue-system":
+		return kueueNamespace
+	default:
+		fmt.Printf("Expected environment variable %s contains an incorrect value", namespaceEnvVar)
+		os.Exit(1)
+		return undefinedNamespace
+	}
 }
