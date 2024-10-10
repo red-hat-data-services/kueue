@@ -1,7 +1,7 @@
 # Start of Go versioning workaround for lack of go-toolset for version 1.22
 FROM registry-proxy.engineering.redhat.com/rh-osbs/openshift-golang-builder@sha256:9576ac41e16b2262d2871a4064394d650d73221ceb07d1877772fbe98c6f0b6f AS golang
 
-FROM registry.redhat.io/ubi8/ubi:latest AS builder
+FROM registry.redhat.io/ubi8/ubi@sha256:a965f33ee4ee57dc8e40a1f9350ddf28ed0727b6cf80db46cdad0486a7580f9d AS builder
 
 ARG GOLANG_VERSION=1.22.2
 
@@ -32,8 +32,24 @@ COPY . .
 # Build
 RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
 
+FROM registry.redhat.io/ubi8/ubi-minimal@sha256:7583ca0ea52001562bd81a961da3f75222209e6192e4e413ee226cff97dbd48c AS runtime
 
-FROM registry.redhat.io/ubi8/ubi-minimal:latest AS runtime
+## Build args to be used at this step
+ARG CI_CONTAINER_VERSION
+ARG USER=65532
+
+LABEL com.redhat.component="odh-kueue-controller-container" \
+      name="managed-open-data-hub/odh-kueue-controller-rhel8" \
+      version="${CI_CONTAINER_VERSION}" \
+      git.url="${CI_KUEUE_UPSTREAM_URL}" \
+      git.commit="${CI_KUEUE_UPSTREAM_COMMIT}" \
+      summary="odh-kueue-controller" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-kueue-controller" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      description="Kueue is a set of APIs and controller for job queueing. It is a job-level manager that decides when a job should be admitted to start (as in pods can be created) and when it should stop (as in active pods should be deleted)." \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
+
 
 WORKDIR /
 USER root
