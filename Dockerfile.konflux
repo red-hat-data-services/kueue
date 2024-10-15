@@ -35,19 +35,16 @@ RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
 FROM registry.redhat.io/ubi8/ubi-minimal@sha256:7583ca0ea52001562bd81a961da3f75222209e6192e4e413ee226cff97dbd48c AS runtime
 
 ## Build args to be used at this step
-ARG CI_CONTAINER_VERSION
 ARG USER=65532
 
 LABEL com.redhat.component="odh-kueue-controller-container" \
       name="managed-open-data-hub/odh-kueue-controller-rhel8" \
-      version="${CI_CONTAINER_VERSION}" \
-      git.url="${CI_KUEUE_UPSTREAM_URL}" \
-      git.commit="${CI_KUEUE_UPSTREAM_COMMIT}" \
+      description="Kueue is a set of APIs and controller for job queueing. It is a job-level manager that decides when a job should be admitted to start (as in pods can be created) and when it should stop (as in active pods should be deleted)." \
       summary="odh-kueue-controller" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
       io.openshift.expose-services="" \
       io.k8s.display-name="odh-kueue-controller" \
-      maintainer="['managed-open-data-hub@redhat.com']" \
-      description="Kueue is a set of APIs and controller for job queueing. It is a job-level manager that decides when a job should be admitted to start (as in pods can be created) and when it should stop (as in active pods should be deleted)." \
+      io.k8s.description="odh-kueue-controller" \
       com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
 
 
