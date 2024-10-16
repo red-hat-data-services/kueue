@@ -1,0 +1,56 @@
+# Start of Go versioning workaround for lack of go-toolset for version 1.22
+FROM registry-proxy.engineering.redhat.com/rh-osbs/openshift-golang-builder@sha256:9576ac41e16b2262d2871a4064394d650d73221ceb07d1877772fbe98c6f0b6f AS golang
+
+FROM registry.redhat.io/ubi8/ubi@sha256:a965f33ee4ee57dc8e40a1f9350ddf28ed0727b6cf80db46cdad0486a7580f9d AS builder
+
+ARG GOLANG_VERSION=1.22.2
+
+# Install system dependencies
+RUN dnf upgrade -y && dnf install -y \
+    gcc \
+    make \
+    openssl-devel \
+    && dnf clean all && rm -rf /var/cache/yum
+
+# Install Go
+ENV PATH=/usr/local/go/bin:$PATH
+
+COPY --from=golang /usr/lib/golang /usr/local/go
+
+WORKDIR /workspace
+
+# Copy the Go Modules manifests
+COPY go.mod go.mod
+COPY go.sum go.sum
+# cache deps before building and copying source so that we don't need to re-download as much
+# and so that source changes don't invalidate our downloaded layer
+RUN go mod download
+
+# Copy the go source
+COPY . .
+
+# Build
+RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
+
+FROM registry.redhat.io/ubi8/ubi-minimal@sha256:7583ca0ea52001562bd81a961da3f75222209e6192e4e413ee226cff97dbd48c AS runtime
+
+## Build args to be used at this step
+ARG USER=65532
+
+LABEL com.redhat.component="odh-kueue-controller-container" \
+      name="managed-open-data-hub/odh-kueue-controller-rhel8" \
+      description="Kueue is a set of APIs and controller for job queueing. It is a job-level manager that decides when a job should be admitted to start (as in pods can be created) and when it should stop (as in active pods should be deleted)." \
+      summary="odh-kueue-controller" \
+      maintainer="['managed-open-data-hub@redhat.com']" \
+      io.openshift.expose-services="" \
+      io.k8s.display-name="odh-kueue-controller" \
+      io.k8s.description="odh-kueue-controller" \
+      com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
+
+
+WORKDIR /
+USER root
+COPY --from=builder /workspace/bin/manager /manager
+USER 65532:65532
+
+ENTRYPOINT ["/manager"]
