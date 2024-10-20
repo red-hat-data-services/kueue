@@ -97,6 +97,14 @@ const (
 	// Enable more than one workload sharing flavors to preempt within a Cohort,
 	// as long as the preemption targets don't overlap.
 	MultiplePreemptions featuregate.Feature = "MultiplePreemptions"
+
+	// **Note** - This is taken from upstream commit, keeping the details intact.
+	// owner: @mbobrovskyi
+	// beta: v0.9
+	//
+	// Enable the Flavors status field in the LocalQueue, allowing users to view
+	// all currently available ResourceFlavors in the LocalQueue.
+	ExposeFlavorsInLocalQueue featuregate.Feature = "ExposeFlavorsInLocalQueue"
 )
 
 func init() {
@@ -120,6 +128,7 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	LendingLimit:                    {Default: false, PreRelease: featuregate.Alpha},
 	MultiKueueBatchJobWithManagedBy: {Default: false, PreRelease: featuregate.Alpha},
 	MultiplePreemptions:             {Default: false, PreRelease: featuregate.Alpha},
+	ExposeFlavorsInLocalQueue:       {Default: true, PreRelease: featuregate.Beta},
 }
 
 func SetFeatureGateDuringTest(tb testing.TB, f featuregate.Feature, value bool) func() {
