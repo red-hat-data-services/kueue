@@ -45,6 +45,7 @@ LABEL com.redhat.component="odh-kueue-controller-container" \
       io.openshift.expose-services="" \
       io.k8s.display-name="odh-kueue-controller" \
       io.k8s.description="odh-kueue-controller" \
+      io.openshift.tags="" \
       com.redhat.license_terms="https://www.redhat.com/licenses/Red_Hat_Standard_EULA_20191108.pdf"
 
 
