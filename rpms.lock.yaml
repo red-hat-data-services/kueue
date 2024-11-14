@@ -53,13 +53,13 @@ arches:
     name: glibc-headers
     evr: 2.28-251.el8_10.5
     sourcerpm: glibc-2.28-251.el8_10.5.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/kernel-headers-4.18.0-553.22.1.el8_10.x86_64.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/kernel-headers-4.18.0-553.27.1.el8_10.x86_64.rpm
     repoid: ubi-8-baseos-rpms
-    size: 12379728
-    checksum: sha256:19e6e2263e3fb21394e0681496963ed768f4749d493ba15caa602c203284579d
+    size: 12390840
+    checksum: sha256:1c113dca5fc8e056fefa2c959421fd891b2ddffa79696e8020904b540597a181
     name: kernel-headers
-    evr: 4.18.0-553.22.1.el8_10
-    sourcerpm: kernel-4.18.0-553.22.1.el8_10.src.rpm
+    evr: 4.18.0-553.27.1.el8_10
+    sourcerpm: kernel-4.18.0-553.27.1.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/keyutils-libs-devel-1.5.10-9.el8.x86_64.rpm
     repoid: ubi-8-baseos-rpms
     size: 49216
@@ -67,13 +67,13 @@ arches:
     name: keyutils-libs-devel
     evr: 1.5.10-9.el8
     sourcerpm: keyutils-1.5.10-9.el8.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/krb5-devel-1.18.2-29.el8_10.x86_64.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/krb5-devel-1.18.2-30.el8_10.x86_64.rpm
     repoid: ubi-8-baseos-rpms
-    size: 575992
-    checksum: sha256:e66507d6a540a2febeb83fd9e819959952664a243eb0688ff8b0090d44e16fb6
+    size: 576216
+    checksum: sha256:ee3da20c7fc382085b221afcef0d7d3fc5d865e23b1d275bc66049445121813c
     name: krb5-devel
-    evr: 1.18.2-29.el8_10
-    sourcerpm: krb5-1.18.2-29.el8_10.src.rpm
+    evr: 1.18.2-30.el8_10
+    sourcerpm: krb5-1.18.2-30.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libcom_err-devel-1.45.6-5.el8.x86_64.rpm
     repoid: ubi-8-baseos-rpms
     size: 39660
@@ -88,13 +88,13 @@ arches:
     name: libgomp
     evr: 8.5.0-22.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libkadm5-1.18.2-29.el8_10.x86_64.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libkadm5-1.18.2-30.el8_10.x86_64.rpm
     repoid: ubi-8-baseos-rpms
-    size: 192940
-    checksum: sha256:973070b4340c40bb669d567f1c7eb22e088de73270274d112f56855ac04190e8
+    size: 193156
+    checksum: sha256:9ed4bdba1758223305a89f39cd742ec63c273bd70673f3752b1d5a359905c371
     name: libkadm5
-    evr: 1.18.2-29.el8_10
-    sourcerpm: krb5-1.18.2-29.el8_10.src.rpm
+    evr: 1.18.2-30.el8_10
+    sourcerpm: krb5-1.18.2-30.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libpkgconf-1.4.2-1.el8.x86_64.rpm
     repoid: ubi-8-baseos-rpms
     size: 35620
@@ -137,13 +137,13 @@ arches:
     name: make
     evr: 1:4.2.1-11.el8
     sourcerpm: make-4.2.1-11.el8.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/o/openssl-devel-1.1.1k-12.el8_9.x86_64.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/o/openssl-devel-1.1.1k-14.el8_6.x86_64.rpm
     repoid: ubi-8-baseos-rpms
-    size: 2439064
-    checksum: sha256:e2e9458cff5023a30e1f60789fe40fcb30f777a3f46cf9635f00c1ca4b937c4f
+    size: 2439792
+    checksum: sha256:40f49e4e0fa180d59d954306534bf7176506d5b68f849ce922ce89fedaffb656
     name: openssl-devel
-    evr: 1:1.1.1k-12.el8_9
-    sourcerpm: openssl-1.1.1k-12.el8_9.src.rpm
+    evr: 1:1.1.1k-14.el8_6
+    sourcerpm: openssl-1.1.1k-14.el8_6.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/p/pcre2-devel-10.32-3.el8_6.x86_64.rpm
     repoid: ubi-8-baseos-rpms
     size: 619372
