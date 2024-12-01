@@ -1,7 +1,0 @@
-contentOrigin:
-  repofiles:
-    - ubi.repo
-packages:
-  - gcc
-  - make
-  - openssl-devel
