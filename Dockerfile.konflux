@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi8/go-toolset:1.22@sha256:e66779cc9bef4b5d3361134fda8f054314eef5dc6b356086bae59e65805a57ad AS builder
+FROM registry.access.redhat.com/ubi8/go-toolset:1.22.7-5.1732646420@sha256:e66779cc9bef4b5d3361134fda8f054314eef5dc6b356086bae59e65805a57ad AS builder
 
 WORKDIR /workspace
 
@@ -7,7 +7,7 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+#RUN go mod download
 
 # Copy the go source
 COPY . .
