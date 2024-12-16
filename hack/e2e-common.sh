@@ -63,6 +63,13 @@ export E2E_TEST_AGNHOST_IMAGE_OLD=registry.k8s.io/e2e-test-images/agnhost:2.52@s
 E2E_TEST_AGNHOST_IMAGE_OLD_WITHOUT_SHA=${E2E_TEST_AGNHOST_IMAGE_OLD%%@*}
 export E2E_TEST_AGNHOST_IMAGE=registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
 E2E_TEST_AGNHOST_IMAGE_WITHOUT_SHA=${E2E_TEST_AGNHOST_IMAGE%%@*}
+# sleep image to use for testing.
+export E2E_TEST_SLEEP_IMAGE_OLD=gcr.io/k8s-staging-perf-tests/sleep:v0.0.3@sha256:00ae8e01dd4439edfb7eb9f1960ac28eba16e952956320cce7f2ac08e3446e6b
+E2E_TEST_SLEEP_IMAGE_OLD_WITHOUT_SHA=${E2E_TEST_SLEEP_IMAGE_OLD%%@*}
+export E2E_TEST_SLEEP_IMAGE=gcr.io/k8s-staging-perf-tests/sleep:v0.1.0@sha256:8d91ddf9f145b66475efda1a1b52269be542292891b5de2a7fad944052bab6ea
+E2E_TEST_SLEEP_IMAGE_WITHOUT_SHA=${E2E_TEST_SLEEP_IMAGE%%@*}
+export E2E_TEST_CURL_IMAGE=curlimages/curl:8.11.0@sha256:6324a8b41a7f9d80db93c7cf65f025411f55956c6b248037738df3bfca32410c
+E2E_TEST_CURL_IMAGE_WITHOUT_SHA=${E2E_TEST_CURL_IMAGE%%@*}
 
 
 # $1 - cluster name
@@ -87,12 +94,18 @@ function cluster_create {
 function prepare_docker_images {
     docker pull "$E2E_TEST_AGNHOST_IMAGE_OLD"
     docker pull "$E2E_TEST_AGNHOST_IMAGE"
+    docker pull "$E2E_TEST_SLEEP_IMAGE_OLD"
+    docker pull "$E2E_TEST_SLEEP_IMAGE"
+    docker pull "$E2E_TEST_CURL_IMAGE"
 
     # We can load image by a digest but we cannot reference it by the digest that we pulled.
     # For more information https://github.com/kubernetes-sigs/kind/issues/2394#issuecomment-888713831.
     # Manually create tag for image with digest which is already pulled
     docker tag $E2E_TEST_AGNHOST_IMAGE_OLD "$E2E_TEST_AGNHOST_IMAGE_OLD_WITHOUT_SHA"
     docker tag $E2E_TEST_AGNHOST_IMAGE "$E2E_TEST_AGNHOST_IMAGE_WITHOUT_SHA"
+    docker tag $E2E_TEST_SLEEP_IMAGE_OLD "$E2E_TEST_SLEEP_IMAGE_OLD_WITHOUT_SHA"
+    docker tag $E2E_TEST_SLEEP_IMAGE "$E2E_TEST_SLEEP_IMAGE_WITHOUT_SHA"
+    docker tag $E2E_TEST_CURL_IMAGE "$E2E_TEST_CURL_IMAGE_WITHOUT_SHA"
 
     if [[ -n ${APPWRAPPER_VERSION:-} ]]; then
         docker pull "${APPWRAPPER_IMAGE}"
@@ -122,6 +135,9 @@ function prepare_docker_images {
 function cluster_kind_load {
     cluster_kind_load_image "$1" "${E2E_TEST_AGNHOST_IMAGE_OLD_WITHOUT_SHA}"
     cluster_kind_load_image "$1" "${E2E_TEST_AGNHOST_IMAGE_WITHOUT_SHA}"
+    cluster_kind_load_image "$1" "${E2E_TEST_SLEEP_IMAGE_OLD_WITHOUT_SHA}"
+    cluster_kind_load_image "$1" "${E2E_TEST_SLEEP_IMAGE_WITHOUT_SHA}"
+    cluster_kind_load_image "$1" "${E2E_TEST_CURL_IMAGE_WITHOUT_SHA}"
     cluster_kind_load_image "$1" "$IMAGE_TAG"
 }
 
