@@ -25,3 +25,7 @@ basis.
 
 We follow the Kubernetes cherry-pick [principles](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-release/cherry-picks.md#what-kind-of-prs-are-good-for-cherry-picks), but the choice of cherry-picks
 is more relaxed, eg. we allow to cherry-pick minor improvements for [alpha Kueue features](https://kueue.sigs.k8s.io/docs/installation/#change-the-feature-gates-configuration).
+
+### Update component_metadata to align with the kueue version for new releases
+
+If the changes include a code rebase from the `kubernetes-sigs/kueue repository`, ensure `config/component_metadata.yaml` file is updated with the respective Kueue version for new releases
