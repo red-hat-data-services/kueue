@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -57,7 +56,7 @@ var _ webhook.CustomDefaulter = &WorkloadWebhook{}
 func (w *WorkloadWebhook) Default(ctx context.Context, obj runtime.Object) error {
 	wl := obj.(*kueue.Workload)
 	log := ctrl.LoggerFrom(ctx).WithName("workload-webhook")
-	log.V(5).Info("Applying defaults", "workload", klog.KObj(wl))
+	log.V(5).Info("Applying defaults")
 
 	// drop minCounts if PartialAdmission is not enabled
 	if !features.Enabled(features.PartialAdmission) {
@@ -77,7 +76,7 @@ var _ webhook.CustomValidator = &WorkloadWebhook{}
 func (w *WorkloadWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	wl := obj.(*kueue.Workload)
 	log := ctrl.LoggerFrom(ctx).WithName("workload-webhook")
-	log.V(5).Info("Validating create", "workload", klog.KObj(wl))
+	log.V(5).Info("Validating create")
 	return nil, ValidateWorkload(wl).ToAggregate()
 }
 
@@ -86,7 +85,7 @@ func (w *WorkloadWebhook) ValidateUpdate(ctx context.Context, oldObj, newObj run
 	newWL := newObj.(*kueue.Workload)
 	oldWL := oldObj.(*kueue.Workload)
 	log := ctrl.LoggerFrom(ctx).WithName("workload-webhook")
-	log.V(5).Info("Validating update", "workload", klog.KObj(newWL))
+	log.V(5).Info("Validating update")
 	return nil, ValidateWorkloadUpdate(newWL, oldWL).ToAggregate()
 }
 
@@ -99,17 +98,17 @@ func ValidateWorkload(obj *kueue.Workload) field.ErrorList {
 	var allErrs field.ErrorList
 	specPath := field.NewPath("spec")
 
-	variableCountPosets := 0
+	variableCountPodSets := 0
 	for i := range obj.Spec.PodSets {
 		ps := &obj.Spec.PodSets[i]
 		allErrs = append(allErrs, validatePodSet(ps, specPath.Child("podSets").Index(i))...)
 		if ps.MinCount != nil {
-			variableCountPosets++
+			variableCountPodSets++
 		}
 	}
 
-	if variableCountPosets > 1 {
-		allErrs = append(allErrs, field.Invalid(specPath.Child("podSets"), variableCountPosets, "at most one podSet can use minCount"))
+	if variableCountPodSets > 1 {
+		allErrs = append(allErrs, field.Invalid(specPath.Child("podSets"), variableCountPodSets, "at most one podSet can use minCount"))
 	}
 
 	statusPath := field.NewPath("status")
@@ -249,7 +248,7 @@ func validateReclaimablePods(obj *kueue.Workload, basePath *field.Path) field.Er
 	for i := range obj.Spec.PodSets {
 		name := obj.Spec.PodSets[i].Name
 		knowPodSets[name] = &obj.Spec.PodSets[i]
-		knowPodSetNames = append(knowPodSetNames, name)
+		knowPodSetNames[i] = name
 	}
 
 	var ret field.ErrorList

@@ -19,6 +19,7 @@ package v1beta1
 import (
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	configv1alpha1 "k8s.io/component-base/config/v1alpha1"
 )
@@ -47,6 +48,9 @@ type Configuration struct {
 	// unsuspended, they will start immediately.
 	ManageJobsWithoutQueueName bool `json:"manageJobsWithoutQueueName"`
 
+	// ManagedJobsNamespaceSelector can be used to omit some namespaces from ManagedJobsWithoutQueueName
+	ManagedJobsNamespaceSelector *metav1.LabelSelector `json:"managedJobsNamespaceSelector,omitempty"`
+
 	// InternalCertManagement is configuration for internalCertManagement
 	InternalCertManagement *InternalCertManagement `json:"internalCertManagement,omitempty"`
 
@@ -66,6 +70,9 @@ type Configuration struct {
 
 	// QueueVisibility is configuration to expose the information about the top
 	// pending workloads.
+	// Deprecated: This field will be removed on v1beta2, use VisibilityOnDemand
+	// (https://kueue.sigs.k8s.io/docs/tasks/manage/monitor_pending_workloads/pending_workloads_on_demand/)
+	// instead.
 	QueueVisibility *QueueVisibility `json:"queueVisibility,omitempty"`
 
 	// MultiKueue controls the behaviour of the MultiKueue AdmissionCheck Controller.
@@ -76,6 +83,12 @@ type Configuration struct {
 
 	// Resources provides additional configuration options for handling the resources.
 	Resources *Resources `json:"resources,omitempty"`
+
+	// FeatureGates is a map of feature names to bools that allows to override the
+	// default enablement status of a feature. The map cannot be used in conjunction
+	// with passing the list of features via the command line argument "--feature-gates"
+	// for the Kueue Deployment.
+	FeatureGates map[string]bool `json:"featureGates,omitempty"`
 }
 
 type ControllerManager struct {
@@ -318,6 +331,8 @@ type Integrations struct {
 	//  - "kubeflow.org/tfjob"
 	//  - "kubeflow.org/xgboostjob"
 	//  - "pod"
+	//  - "deployment" (requires enabling pod integration)
+	//  - "statefulset" (requires enabling pod integration)
 	Frameworks []string `json:"frameworks,omitempty"`
 	// List of GroupVersionKinds that are managed for Kueue by external controllers;
 	// the expected format is `Kind.version.group.com`.
@@ -368,6 +383,28 @@ type ClusterQueueVisibility struct {
 type Resources struct {
 	// ExcludedResourcePrefixes defines which resources should be ignored by Kueue
 	ExcludeResourcePrefixes []string `json:"excludeResourcePrefixes,omitempty"`
+
+	// Transformations defines how to transform PodSpec resources into Workload resource requests.
+	// This is intended to be a map with Input as the key (enforced by validation code)
+	Transformations []ResourceTransformation `json:"transformations,omitempty"`
+}
+
+type ResourceTransformationStrategy string
+
+const Retain ResourceTransformationStrategy = "Retain"
+const Replace ResourceTransformationStrategy = "Replace"
+
+type ResourceTransformation struct {
+	// Input is the name of the input resource.
+	Input corev1.ResourceName `json:"input"`
+
+	// Strategy specifies if the input resource should be replaced or retained.
+	// Defaults to Retain
+	Strategy *ResourceTransformationStrategy `json:"strategy,omitempty"`
+
+	// Outputs specifies the output resources and quantities per unit of input resource.
+	// An empty Outputs combined with a `Replace` Strategy causes the Input resource to be ignored by Kueue.
+	Outputs corev1.ResourceList `json:"outputs,omitempty"`
 }
 
 type PreemptionStrategy string

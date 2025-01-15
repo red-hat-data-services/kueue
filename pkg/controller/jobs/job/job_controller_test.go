@@ -26,17 +26,21 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	testingclock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/constants"
 	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/podset"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	utiltestingjob "sigs.k8s.io/kueue/pkg/util/testingjobs/job"
@@ -322,38 +326,80 @@ func TestPodSetsInfo(t *testing.T) {
 }
 
 func TestPodSets(t *testing.T) {
-	podTemplate := utiltestingjob.MakeJob("job", "ns").Spec.Template.DeepCopy()
+	jobTemplate := utiltestingjob.MakeJob("job", "ns")
+
 	cases := map[string]struct {
 		job         *Job
 		wantPodSets []kueue.PodSet
 	}{
 		"no partial admission": {
-			job: (*Job)(utiltestingjob.MakeJob("job", "ns").Parallelism(3).Obj()),
+			job: (*Job)(jobTemplate.Clone().Parallelism(3).Obj()),
 			wantPodSets: []kueue.PodSet{
 				{
 					Name:     kueue.DefaultPodSetName,
-					Template: *podTemplate.DeepCopy(),
+					Template: *jobTemplate.Clone().Spec.Template.DeepCopy(),
 					Count:    3,
 				},
 			},
 		},
 		"partial admission": {
-			job: (*Job)(utiltestingjob.MakeJob("job", "ns").Parallelism(3).SetAnnotation(JobMinParallelismAnnotation, "2").Obj()),
+			job: (*Job)(
+				jobTemplate.Clone().
+					Parallelism(3).
+					SetAnnotation(JobMinParallelismAnnotation, "2").
+					Obj(),
+			),
 			wantPodSets: []kueue.PodSet{
 				{
 					Name:     kueue.DefaultPodSetName,
-					Template: *podTemplate.DeepCopy(),
+					Template: *jobTemplate.Clone().Spec.Template.DeepCopy(),
 					Count:    3,
 					MinCount: ptr.To[int32](2),
 				},
 			},
+		},
+		"with required topology annotation": {
+			job: (*Job)(
+				jobTemplate.Clone().
+					Parallelism(3).
+					PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+					Obj(),
+			),
+			wantPodSets: []kueue.PodSet{
+				{
+					Name: kueue.DefaultPodSetName,
+					Template: jobTemplate.Clone().
+						PodAnnotation(kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+						Spec.Template,
+					Count: 3,
+					TopologyRequest: &kueue.PodSetTopologyRequest{Required: ptr.To("cloud.com/block"),
+						PodIndexLabel: ptr.To(batchv1.JobCompletionIndexAnnotation)},
+				},
+			},
+		},
+		"with preferred topology annotation": {
+			job: (*Job)(
+				jobTemplate.Clone().
+					Parallelism(3).
+					PodAnnotation(kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+					Obj(),
+			),
+			wantPodSets: []kueue.PodSet{{
+				Name: kueue.DefaultPodSetName,
+				Template: jobTemplate.Clone().
+					PodAnnotation(kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+					Spec.Template,
+				Count: 3,
+				TopologyRequest: &kueue.PodSetTopologyRequest{Preferred: ptr.To("cloud.com/block"),
+					PodIndexLabel: ptr.To(batchv1.JobCompletionIndexAnnotation)},
+			}},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			gotPodSets := tc.job.PodSets()
 			if diff := cmp.Diff(tc.wantPodSets, gotPodSets); diff != "" {
-				t.Errorf("node selectors mismatch (-want +got):\n%s", diff)
+				t.Errorf("pod sets mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -396,6 +442,11 @@ var (
 )
 
 func TestReconciler(t *testing.T) {
+	// the clock is primarily used with second rounded times
+	// use the current time trimmed.
+	testStartTime := time.Now().Truncate(time.Second)
+	fakeClock := testingclock.NewFakeClock(testStartTime)
+
 	t.Cleanup(jobframework.EnableIntegrationsForTest(t, FrameworkName))
 	baseJobWrapper := utiltestingjob.MakeJob("job", "ns").
 		Suspend(true).
@@ -415,7 +466,18 @@ func TestReconciler(t *testing.T) {
 	basePCWrapper := utiltesting.MakePriorityClass("test-pc").
 		PriorityValue(200)
 
+	testNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ns",
+			Labels: map[string]string{
+				"kubernetes.io/metadata.name": "ns",
+			},
+		},
+	}
+
 	cases := map[string]struct {
+		enableTopologyAwareScheduling bool
+
 		reconcilerOptions []jobframework.Option
 		job               batchv1.Job
 		workloads         []kueue.Workload
@@ -426,6 +488,37 @@ func TestReconciler(t *testing.T) {
 		wantEvents        []utiltesting.EventRecord
 		wantErr           error
 	}{
+		"PodSet label and Workload annotation are set when Job is starting; TopologyAwareScheduling enabled": {
+			enableTopologyAwareScheduling: true,
+			reconcilerOptions: []jobframework.Option{
+				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
+			},
+			job: *baseJobWrapper.DeepCopy(),
+			wantJob: *baseJobWrapper.Clone().
+				Suspend(false).
+				PodLabel(kueuealpha.PodSetLabel, kueue.DefaultPodSetName).
+				PodAnnotation(kueuealpha.WorkloadAnnotation, "wl").
+				Obj(),
+			workloads: []kueue.Workload{
+				*baseWorkloadWrapper.Clone().
+					Admitted(true).
+					Obj(),
+			},
+			wantWorkloads: []kueue.Workload{
+				*baseWorkloadWrapper.Clone().
+					Admitted(true).
+					Obj(),
+			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Name: "job", Namespace: "ns"},
+					EventType: "Normal",
+					Reason:    "Started",
+					Message:   "Admitted by clusterQueue cq",
+				},
+			},
+		},
 		"when workload is created, it has its owner ProvReq annotations": {
 			job: *baseJobWrapper.Clone().
 				SetAnnotation(controllerconsts.ProvReqAnnotationPrefix+"test-annotation", "test-val").
@@ -552,12 +645,12 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			workloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					AdmittedAt(true, testStartTime.Add(-time.Second)).
 					Active(false).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
-						Reason:  kueue.WorkloadEvictedByDeactivation,
+						Reason:  kueue.WorkloadDeactivated,
 						Message: "The workload is deactivated",
 					}).
 					AdmissionCheck(kueue.AdmissionCheckState{
@@ -576,7 +669,7 @@ func TestReconciler(t *testing.T) {
 			},
 			wantWorkloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					PastAdmittedTime(1).
 					Active(false).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
@@ -593,13 +686,13 @@ func TestReconciler(t *testing.T) {
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadRequeued,
 						Status:  metav1.ConditionFalse,
-						Reason:  kueue.WorkloadEvictedByDeactivation,
+						Reason:  kueue.WorkloadDeactivated,
 						Message: "The workload is deactivated",
 					}).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
-						Reason:  kueue.WorkloadEvictedByDeactivation,
+						Reason:  kueue.WorkloadDeactivated,
 						Message: "The workload is deactivated",
 					}).
 					AdmissionCheck(kueue.AdmissionCheckState{
@@ -634,7 +727,7 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			workloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					AdmittedAt(true, testStartTime.Add(-time.Second)).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
@@ -645,7 +738,7 @@ func TestReconciler(t *testing.T) {
 			},
 			wantWorkloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					PastAdmittedTime(1).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
 						Status:  metav1.ConditionFalse,
@@ -690,7 +783,7 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			workloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					AdmittedAt(true, testStartTime.Add(-time.Second)).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
@@ -713,7 +806,7 @@ func TestReconciler(t *testing.T) {
 			},
 			wantWorkloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					PastAdmittedTime(1).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
 						Status:  metav1.ConditionFalse,
@@ -728,7 +821,7 @@ func TestReconciler(t *testing.T) {
 					}).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadRequeued,
-						Status:  metav1.ConditionTrue,
+						Status:  metav1.ConditionFalse,
 						Reason:  kueue.WorkloadEvictedByAdmissionCheck,
 						Message: "At least one admission check is false",
 					}).
@@ -770,7 +863,7 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			workloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					AdmittedAt(true, testStartTime.Add(-time.Second)).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
@@ -793,7 +886,7 @@ func TestReconciler(t *testing.T) {
 			},
 			wantWorkloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					PastAdmittedTime(1).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
 						Status:  metav1.ConditionFalse,
@@ -850,7 +943,7 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			workloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					AdmittedAt(true, testStartTime.Add(-time.Second)).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
@@ -873,7 +966,7 @@ func TestReconciler(t *testing.T) {
 			},
 			wantWorkloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					PastAdmittedTime(1).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
 						Status:  metav1.ConditionFalse,
@@ -930,7 +1023,7 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			workloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					AdmittedAt(true, testStartTime.Add(-time.Second)).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadEvicted,
 						Status:  metav1.ConditionTrue,
@@ -953,7 +1046,7 @@ func TestReconciler(t *testing.T) {
 			},
 			wantWorkloads: []kueue.Workload{
 				*baseWorkloadWrapper.Clone().
-					Admitted(true).
+					PastAdmittedTime(1).
 					Condition(metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
 						Status:  metav1.ConditionFalse,
@@ -1443,6 +1536,7 @@ func TestReconciler(t *testing.T) {
 		"suspended job with matching admitted workload is unsuspended": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: *baseJobWrapper.DeepCopy(),
 			wantJob: *baseJobWrapper.Clone().
@@ -1470,6 +1564,7 @@ func TestReconciler(t *testing.T) {
 		"non-matching admitted workload is deleted": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job:     *baseJobWrapper.DeepCopy(),
 			wantJob: *baseJobWrapper.DeepCopy(),
@@ -1492,6 +1587,7 @@ func TestReconciler(t *testing.T) {
 		"non-matching non-admitted workload is updated": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job:     *baseJobWrapper.DeepCopy(),
 			wantJob: *baseJobWrapper.DeepCopy(),
@@ -1522,6 +1618,7 @@ func TestReconciler(t *testing.T) {
 		"suspended job with partial admission and admitted workload is unsuspended": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: *baseJobWrapper.Clone().
 				SetAnnotation(JobMinParallelismAnnotation, "5").
@@ -1564,6 +1661,7 @@ func TestReconciler(t *testing.T) {
 		"unsuspended job with partial admission and non-matching admitted workload is suspended and workload is deleted": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: *baseJobWrapper.Clone().
 				SetAnnotation(JobMinParallelismAnnotation, "5").
@@ -1780,6 +1878,7 @@ func TestReconciler(t *testing.T) {
 		"non-standalone job is not suspended if its parent workload is admitted": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: *baseJobWrapper.
 				Clone().
@@ -1816,6 +1915,7 @@ func TestReconciler(t *testing.T) {
 		"non-standalone job is suspended if its parent workload is found and not admitted": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: *baseJobWrapper.
 				Clone().
@@ -1894,6 +1994,7 @@ func TestReconciler(t *testing.T) {
 		"checking a second non-matching workload is deleted": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: *baseJobWrapper.
 				Clone().
@@ -2252,7 +2353,7 @@ func TestReconciler(t *testing.T) {
 				Obj(),
 			wantWorkloads: []kueue.Workload{},
 		},
-		"when the prebuilt workload is missing, no new one is created and the job is suspended": {
+		"when the prebuilt workload is missing, no new one is created, the job is suspended and prebuild workload not found error is returned": {
 			job: *baseJobWrapper.
 				Clone().
 				Suspend(false).
@@ -2272,6 +2373,7 @@ func TestReconciler(t *testing.T) {
 					Message:   "missing workload",
 				},
 			},
+			wantErr: jobframework.ErrPrebuildWorkloadNotFound,
 		},
 		"when the prebuilt workload exists its owner info is updated": {
 			job: *baseJobWrapper.
@@ -2360,6 +2462,7 @@ func TestReconciler(t *testing.T) {
 					Message:   "missing workload",
 				},
 			},
+			wantErr: jobframework.ErrPrebuildWorkloadNotFound,
 		},
 		"when the prebuilt workload is not equivalent to the job": {
 			job: *baseJobWrapper.
@@ -2411,6 +2514,7 @@ func TestReconciler(t *testing.T) {
 					Message:   "missing workload",
 				},
 			},
+			wantErr: jobframework.ErrPrebuildWorkloadNotFound,
 		},
 		"the workload is not admitted, tolerations and node selector change": {
 			job: *baseJobWrapper.Clone().Toleration(corev1.Toleration{
@@ -2710,15 +2814,78 @@ func TestReconciler(t *testing.T) {
 				},
 			},
 		},
+		"the maximum execution time is passed to the created workload": {
+			job: *baseJobWrapper.Clone().
+				Label(controllerconsts.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			wantJob: *baseJobWrapper.Clone().
+				Label(controllerconsts.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			wantWorkloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("job", "ns").
+					MaximumExecutionTimeSeconds(10).
+					Finalizers(kueue.ResourceInUseFinalizerName).
+					PodSets(*utiltesting.MakePodSet(kueue.DefaultPodSetName, 10).Request(corev1.ResourceCPU, "1").Obj()).
+					Queue("foo").
+					Priority(0).
+					Labels(map[string]string{controllerconsts.JobUIDLabel: string(baseJobWrapper.GetUID())}).
+					Obj(),
+			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Name: "job", Namespace: "ns"},
+					EventType: "Normal",
+					Reason:    "CreatedWorkload",
+					Message:   "Created Workload: ns/" + GetWorkloadNameForJob(baseJobWrapper.Name, baseJobWrapper.GetUID()),
+				},
+			},
+		},
+		"the maximum execution time is updated in the workload": {
+			job: *baseJobWrapper.Clone().
+				Label(controllerconsts.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			wantJob: *baseJobWrapper.Clone().
+				Label(controllerconsts.MaxExecTimeSecondsLabel, "10").
+				Obj(),
+			workloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("job", "ns").
+					MaximumExecutionTimeSeconds(5).
+					Finalizers(kueue.ResourceInUseFinalizerName).
+					PodSets(*utiltesting.MakePodSet(kueue.DefaultPodSetName, 10).Request(corev1.ResourceCPU, "1").Obj()).
+					Queue("foo").
+					Priority(0).
+					Labels(map[string]string{controllerconsts.JobUIDLabel: string(baseJobWrapper.GetUID())}).
+					Obj(),
+			},
+			wantWorkloads: []kueue.Workload{
+				*utiltesting.MakeWorkload("job", "ns").
+					MaximumExecutionTimeSeconds(10).
+					Finalizers(kueue.ResourceInUseFinalizerName).
+					PodSets(*utiltesting.MakePodSet(kueue.DefaultPodSetName, 10).Request(corev1.ResourceCPU, "1").Obj()).
+					Queue("foo").
+					Priority(0).
+					Labels(map[string]string{controllerconsts.JobUIDLabel: string(baseJobWrapper.GetUID())}).
+					Obj(),
+			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Name: "job", Namespace: "ns"},
+					EventType: "Normal",
+					Reason:    "UpdatedWorkload",
+					Message:   "Updated not matching Workload for suspended job: ns/job",
+				},
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, tc.enableTopologyAwareScheduling)
 			ctx, _ := utiltesting.ContextWithLog(t)
 			clientBuilder := utiltesting.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: utiltesting.TreatSSAAsStrategicMerge})
 			if err := SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder)); err != nil {
 				t.Fatalf("Could not setup indexes: %v", err)
 			}
-			objs := append(tc.priorityClasses, &tc.job, utiltesting.MakeResourceFlavor("default").Obj())
+			objs := append(tc.priorityClasses, &tc.job, utiltesting.MakeResourceFlavor("default").Obj(), testNamespace)
 			kcBuilder := clientBuilder.
 				WithObjects(objs...)
 
@@ -2747,7 +2914,7 @@ func TestReconciler(t *testing.T) {
 				}
 			}
 			recorder := &utiltesting.EventRecorder{}
-			reconciler := NewReconciler(kClient, recorder, tc.reconcilerOptions...)
+			reconciler := NewReconciler(kClient, recorder, append(tc.reconcilerOptions, jobframework.WithClock(t, fakeClock))...)
 
 			jobKey := client.ObjectKeyFromObject(&tc.job)
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{

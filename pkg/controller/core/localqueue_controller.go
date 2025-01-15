@@ -40,7 +40,10 @@ import (
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/constants"
 	"sigs.k8s.io/kueue/pkg/controller/core/indexer"
+	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/metrics"
 	"sigs.k8s.io/kueue/pkg/queue"
+	"sigs.k8s.io/kueue/pkg/util/resource"
 )
 
 const (
@@ -63,7 +66,11 @@ type LocalQueueReconciler struct {
 	wlUpdateCh chan event.GenericEvent
 }
 
-func NewLocalQueueReconciler(client client.Client, queues *queue.Manager, cache *cache.Cache) *LocalQueueReconciler {
+func NewLocalQueueReconciler(
+	client client.Client,
+	queues *queue.Manager,
+	cache *cache.Cache,
+) *LocalQueueReconciler {
 	return &LocalQueueReconciler{
 		log:        ctrl.Log.WithName("localqueue-reconciler"),
 		queues:     queues,
@@ -142,6 +149,10 @@ func (r *LocalQueueReconciler) Create(e event.CreateEvent) bool {
 		log.Error(err, "Failed to add localQueue to the cache")
 	}
 
+	if features.Enabled(features.LocalQueueMetrics) {
+		recordLocalQueueUsageMetrics(q)
+	}
+
 	return true
 }
 
@@ -151,6 +162,11 @@ func (r *LocalQueueReconciler) Delete(e event.DeleteEvent) bool {
 		// No need to interact with the queue manager for other objects.
 		return true
 	}
+
+	if features.Enabled(features.LocalQueueMetrics) {
+		metrics.ClearLocalQueueResourceMetrics(localQueueReferenceFromLocalQueue(q))
+	}
+
 	r.log.V(2).Info("LocalQueue delete event", "localQueue", klog.KObj(q))
 	r.queues.DeleteLocalQueue(q)
 	r.cache.DeleteLocalQueue(q)
@@ -191,8 +207,36 @@ func (r *LocalQueueReconciler) Update(e event.UpdateEvent) bool {
 	}
 
 	r.queues.DeleteLocalQueue(oldLq)
+	if features.Enabled(features.LocalQueueMetrics) {
+		updateLocalQueueResourceMetrics(newLq)
+	}
 
 	return true
+}
+
+func localQueueReferenceFromLocalQueue(lq *kueue.LocalQueue) metrics.LocalQueueReference {
+	return metrics.LocalQueueReference{
+		Name:      lq.Name,
+		Namespace: lq.Namespace,
+	}
+}
+
+func recordLocalQueueUsageMetrics(queue *kueue.LocalQueue) {
+	for _, flavor := range queue.Status.FlavorUsage {
+		for _, r := range flavor.Resources {
+			metrics.ReportLocalQueueResourceUsage(localQueueReferenceFromLocalQueue(queue), string(flavor.Name), string(r.Name), resource.QuantityToFloat(&r.Total))
+		}
+	}
+	for _, flavor := range queue.Status.FlavorsReservation {
+		for _, r := range flavor.Resources {
+			metrics.ReportLocalQueueResourceReservations(localQueueReferenceFromLocalQueue(queue), string(flavor.Name), string(r.Name), resource.QuantityToFloat(&r.Total))
+		}
+	}
+}
+
+func updateLocalQueueResourceMetrics(queue *kueue.LocalQueue) {
+	metrics.ClearLocalQueueResourceMetrics(localQueueReferenceFromLocalQueue(queue))
+	recordLocalQueueUsageMetrics(queue)
 }
 
 func (r *LocalQueueReconciler) Generic(e event.GenericEvent) bool {
@@ -206,16 +250,16 @@ func (r *LocalQueueReconciler) Generic(e event.GenericEvent) bool {
 // receive events.
 type qWorkloadHandler struct{}
 
-func (h *qWorkloadHandler) Create(context.Context, event.CreateEvent, workqueue.RateLimitingInterface) {
+func (h *qWorkloadHandler) Create(context.Context, event.CreateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *qWorkloadHandler) Update(context.Context, event.UpdateEvent, workqueue.RateLimitingInterface) {
+func (h *qWorkloadHandler) Update(context.Context, event.UpdateEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *qWorkloadHandler) Delete(context.Context, event.DeleteEvent, workqueue.RateLimitingInterface) {
+func (h *qWorkloadHandler) Delete(context.Context, event.DeleteEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *qWorkloadHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.RateLimitingInterface) {
+func (h *qWorkloadHandler) Generic(_ context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	w := e.Object.(*kueue.Workload)
 	if w.Name == "" {
 		return
@@ -235,7 +279,7 @@ type qCQHandler struct {
 	client client.Client
 }
 
-func (h *qCQHandler) Create(ctx context.Context, e event.CreateEvent, wq workqueue.RateLimitingInterface) {
+func (h *qCQHandler) Create(ctx context.Context, e event.CreateEvent, wq workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	cq, ok := e.Object.(*kueue.ClusterQueue)
 	if !ok {
 		return
@@ -243,7 +287,7 @@ func (h *qCQHandler) Create(ctx context.Context, e event.CreateEvent, wq workque
 	h.addLocalQueueToWorkQueue(ctx, cq, wq)
 }
 
-func (h *qCQHandler) Update(ctx context.Context, e event.UpdateEvent, wq workqueue.RateLimitingInterface) {
+func (h *qCQHandler) Update(ctx context.Context, e event.UpdateEvent, wq workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	newCq, ok := e.ObjectNew.(*kueue.ClusterQueue)
 	if !ok {
 		return
@@ -260,7 +304,7 @@ func (h *qCQHandler) Update(ctx context.Context, e event.UpdateEvent, wq workque
 	h.addLocalQueueToWorkQueue(ctx, newCq, wq)
 }
 
-func (h *qCQHandler) Delete(ctx context.Context, e event.DeleteEvent, wq workqueue.RateLimitingInterface) {
+func (h *qCQHandler) Delete(ctx context.Context, e event.DeleteEvent, wq workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	cq, ok := e.Object.(*kueue.ClusterQueue)
 	if !ok {
 		return
@@ -268,10 +312,10 @@ func (h *qCQHandler) Delete(ctx context.Context, e event.DeleteEvent, wq workque
 	h.addLocalQueueToWorkQueue(ctx, cq, wq)
 }
 
-func (h *qCQHandler) Generic(context.Context, event.GenericEvent, workqueue.RateLimitingInterface) {
+func (h *qCQHandler) Generic(context.Context, event.GenericEvent, workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 }
 
-func (h *qCQHandler) addLocalQueueToWorkQueue(ctx context.Context, cq *kueue.ClusterQueue, wq workqueue.RateLimitingInterface) {
+func (h *qCQHandler) addLocalQueueToWorkQueue(ctx context.Context, cq *kueue.ClusterQueue, wq workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 	log := ctrl.LoggerFrom(ctx).WithValues("clusterQueue", klog.KObj(cq))
 	ctx = ctrl.LoggerInto(ctx, log)
 
@@ -294,7 +338,7 @@ func (r *LocalQueueReconciler) SetupWithManager(mgr ctrl.Manager, cfg *config.Co
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kueue.LocalQueue{}).
 		WithOptions(controller.Options{NeedLeaderElection: ptr.To(false)}).
-		WatchesRawSource(&source.Channel{Source: r.wlUpdateCh}, &qWorkloadHandler{}).
+		WatchesRawSource(source.Channel(r.wlUpdateCh, &qWorkloadHandler{})).
 		Watches(&kueue.ClusterQueue{}, &queueCQHandler).
 		WithEventFilter(r).
 		Complete(WithLeadingManager(mgr, r, &kueue.LocalQueue{}, cfg))
@@ -337,6 +381,12 @@ func (r *LocalQueueReconciler) UpdateStatusIfChanged(
 			Message:            msg,
 			ObservedGeneration: queue.Generation,
 		})
+		if features.Enabled(features.LocalQueueMetrics) {
+			metrics.ReportLocalQueueStatus(metrics.LocalQueueReference{
+				Name:      queue.Name,
+				Namespace: queue.Namespace,
+			}, conditionStatus)
+		}
 	}
 	if !equality.Semantic.DeepEqual(oldStatus, queue.Status) {
 		return r.client.Status().Update(ctx, queue)

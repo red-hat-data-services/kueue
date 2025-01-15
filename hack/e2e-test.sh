@@ -21,46 +21,57 @@ set -o pipefail
 SOURCE_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$SOURCE_DIR/.."
 
-source ${SOURCE_DIR}/e2e-common.sh
+# shellcheck source=hack/e2e-common.sh
+source "${SOURCE_DIR}/e2e-common.sh"
 
 function cleanup {
-    if [ $CREATE_KIND_CLUSTER == 'true' ]
+    if [ "$CREATE_KIND_CLUSTER" == 'true' ]
     then
         if [ ! -d "$ARTIFACTS" ]; then
             mkdir -p "$ARTIFACTS"
         fi
-	cluster_cleanup $KIND_CLUSTER_NAME
+        cluster_cleanup "$KIND_CLUSTER_NAME"
     fi
     #do the image restore here for the case when an error happened during deploy
     restore_managers_image
 }
 
 function startup {
-    if [ $CREATE_KIND_CLUSTER == 'true' ]
+    if [ "$CREATE_KIND_CLUSTER" == 'true' ]
     then
         if [ ! -d "$ARTIFACTS" ]; then
             mkdir -p "$ARTIFACTS"
         fi
-	cluster_create "$KIND_CLUSTER_NAME"  "$SOURCE_DIR/kind-cluster.yaml" 
+        cluster_create "$KIND_CLUSTER_NAME"  "$SOURCE_DIR/$KIND_CLUSTER_FILE"
     fi
 }
 
 function kind_load {
     prepare_docker_images
-    if [ $CREATE_KIND_CLUSTER == 'true' ]
-    then
-	cluster_kind_load $KIND_CLUSTER_NAME
+
+    if [ "$CREATE_KIND_CLUSTER" == 'true' ]; then
+	      cluster_kind_load "$KIND_CLUSTER_NAME"
     fi
-    install_jobset $KIND_CLUSTER_NAME
+
+    if [[ -n ${JOBSET_VERSION:-} ]]; then
+        install_jobset "$KIND_CLUSTER_NAME"
+    fi
+    if [[ -n ${KUBEFLOW_VERSION:-} ]]; then
+        install_kubeflow "$KIND_CLUSTER_NAME"
+    fi
+    if [[ -n ${KUBEFLOW_MPI_VERSION:-} ]]; then
+        install_mpi "$KIND_CLUSTER_NAME"
+    fi
 }
 
 function kueue_deploy {
-    (cd config/components/manager && $KUSTOMIZE edit set image controller=$IMAGE_TAG)
-    cluster_kueue_deploy $KIND_CLUSTER_NAME
+    (cd config/components/manager && $KUSTOMIZE edit set image controller="$IMAGE_TAG")
+    cluster_kueue_deploy "$KIND_CLUSTER_NAME"
 }
 
 trap cleanup EXIT
 startup
 kind_load
 kueue_deploy
-$GINKGO $GINKGO_ARGS --junit-report=junit.xml --output-dir=$ARTIFACTS -v ./test/e2e/singlecluster/...
+# shellcheck disable=SC2086
+$GINKGO $GINKGO_ARGS --junit-report=junit.xml --json-report=e2e.json --output-dir="$ARTIFACTS" -v ./test/e2e/$E2E_TARGET_FOLDER/...

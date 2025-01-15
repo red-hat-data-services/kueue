@@ -28,9 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/features"
@@ -43,6 +44,8 @@ type multikueueAdapter struct{}
 var _ jobframework.MultiKueueAdapter = (*multikueueAdapter)(nil)
 
 func (b *multikueueAdapter) SyncJob(ctx context.Context, localClient client.Client, remoteClient client.Client, key types.NamespacedName, workloadName, origin string) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	localJob := batchv1.Job{}
 	err := localClient.Get(ctx, key, &localJob)
 	if err != nil {
@@ -57,6 +60,12 @@ func (b *multikueueAdapter) SyncJob(ctx context.Context, localClient client.Clie
 
 	// the remote job exists
 	if err == nil {
+		if fromObject(&localJob).IsSuspended() {
+			// Ensure the job is unsuspended before updating its status; otherwise, it will fail when patching the spec.
+			log.V(2).Info("Skipping the sync since the local job is still suspended")
+			return nil
+		}
+
 		if features.Enabled(features.MultiKueueBatchJobWithManagedBy) {
 			return clientutil.PatchStatus(ctx, localClient, &localJob, func() (bool, error) {
 				localJob.Status = remoteJob.Status
@@ -97,7 +106,7 @@ func (b *multikueueAdapter) SyncJob(ctx context.Context, localClient client.Clie
 		remoteJob.Labels = map[string]string{}
 	}
 	remoteJob.Labels[constants.PrebuiltWorkloadLabel] = workloadName
-	remoteJob.Labels[kueuealpha.MultiKueueOriginLabel] = origin
+	remoteJob.Labels[kueue.MultiKueueOriginLabel] = origin
 
 	if features.Enabled(features.MultiKueueBatchJobWithManagedBy) {
 		// clear the managedBy enables the batch/Job controller to take over
@@ -131,8 +140,8 @@ func (b *multikueueAdapter) IsJobManagedByKueue(ctx context.Context, c client.Cl
 		return false, "", err
 	}
 	jobControllerName := ptr.Deref(job.Spec.ManagedBy, "")
-	if jobControllerName != kueuealpha.MultiKueueControllerName {
-		return false, fmt.Sprintf("Expecting spec.managedBy to be %q not %q", kueuealpha.MultiKueueControllerName, jobControllerName), nil
+	if jobControllerName != kueue.MultiKueueControllerName {
+		return false, fmt.Sprintf("Expecting spec.managedBy to be %q not %q", kueue.MultiKueueControllerName, jobControllerName), nil
 	}
 	return true, "", nil
 }

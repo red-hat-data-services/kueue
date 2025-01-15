@@ -35,7 +35,14 @@ type ResourceFlavor struct {
 	Spec ResourceFlavorSpec `json:"spec,omitempty"`
 }
 
+// TopologyReference is the name of the Topology.
+// +kubebuilder:validation:MaxLength=253
+// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+type TopologyReference string
+
 // ResourceFlavorSpec defines the desired state of the ResourceFlavor
+// +kubebuilder:validation:XValidation:rule="!has(self.topologyName) || self.nodeLabels.size() >= 1", message="at least one nodeLabel is required when topology is set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.topologyName) || self == oldSelf", message="resourceFlavorSpec are immutable when topologyName is set"
 type ResourceFlavorSpec struct {
 	// nodeLabels are labels that associate the ResourceFlavor with Nodes that
 	// have the same labels.
@@ -85,6 +92,13 @@ type ResourceFlavorSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(x, has(x.operator) && x.operator == 'Exists' ? !has(x.value) : true)", message="a value must be empty when 'operator' is 'Exists'"
 	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.effect) || x.effect in ['NoSchedule', 'PreferNoSchedule', 'NoExecute'])", message="supported taint effect values: 'NoSchedule', 'PreferNoSchedule', 'NoExecute'"
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// topologyName indicates topology for the TAS ResourceFlavor.
+	// When specified, it enables scraping of the topology information from the
+	// nodes matching to the Resource Flavor node labels.
+	//
+	// +optional
+	TopologyName *TopologyReference `json:"topologyName,omitempty"`
 }
 
 // +kubebuilder:object:root=true

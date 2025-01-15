@@ -42,7 +42,7 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 		},
 		"no parameters specified": {
 			check: utiltesting.MakeAdmissionCheck("check1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
 				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
@@ -56,7 +56,7 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 		"bad ref group": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters("bad.group", ConfigKind, "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
 				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
@@ -70,7 +70,7 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 		"bad ref kind": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters(kueue.GroupVersion.Group, "BadKind", "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
 				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
@@ -84,7 +84,7 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 		"config missing": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
 				Generation(1).
 				Obj(),
 			wantCondition: &metav1.Condition{
@@ -98,16 +98,10 @@ func TestReconcileAdmissionCheck(t *testing.T) {
 		"config found": {
 			check: utiltesting.MakeAdmissionCheck("check1").
 				Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
-				ControllerName(ControllerName).
+				ControllerName(kueue.ProvisioningRequestControllerName).
 				Generation(1).
 				Obj(),
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-				},
-			},
+			configs: []kueue.ProvisioningRequestConfig{*utiltesting.MakeProvisioningRequestConfig("config1").Obj()},
 			wantCondition: &metav1.Condition{
 				Type:               kueue.AdmissionCheckActive,
 				Status:             metav1.ConditionTrue,

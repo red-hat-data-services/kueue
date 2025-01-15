@@ -20,6 +20,10 @@ const (
 	// QueueLabel is the label key in the workload that holds the queue name.
 	QueueLabel = "kueue.x-k8s.io/queue-name"
 
+	// DefaultLocalQueueName is the name for default LocalQueue that is applied
+	// if the feature LocalQueueDefaulting is enabled and QueueLabel is not specified.
+	DefaultLocalQueueName = "default"
+
 	// QueueAnnotation is the annotation key in the workload that holds the queue name.
 	//
 	// Deprecated: Use QueueLabel as a label key.
@@ -39,4 +43,7 @@ const (
 
 	// ProvReqAnnotationPrefix is the prefix for annotations that should be pass to ProvisioningRequest as Parameters.
 	ProvReqAnnotationPrefix = "provreq.kueue.x-k8s.io/"
+
+	// MaxExecTimeSecondsLabel is the label key in the job that holds the maximum execution time.
+	MaxExecTimeSecondsLabel = `kueue.x-k8s.io/max-exec-time-seconds`
 )
