@@ -18,7 +18,6 @@ package scheduler
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/onsi/ginkgo/v2"
@@ -167,10 +166,7 @@ var _ = ginkgo.Describe("Preemption", func() {
 
 			gomega.Expect(k8sClient.Create(ctx, wl3)).To(gomega.Succeed())
 			util.ExpectWorkloadsToBePending(ctx, k8sClient, wl3)
-
-			ginkgo.By("Waiting one second, to ensure that the new workload has a later creation time")
-			time.Sleep(time.Second)
-
+			util.WaitForNextSecondAfterCreation(wl3)
 			ginkgo.By("Creating a new Workload")
 			wl4 := testing.MakeWorkload("wl-4", ns.Name).
 				Queue(q.Name).
@@ -428,19 +424,19 @@ var _ = ginkgo.Describe("Preemption", func() {
 			gomega.Expect(k8sClient.Create(ctx, gammaWl)).To(gomega.Succeed())
 
 			var evictedWorkloads []*kueue.Workload
-			gomega.Eventually(func() int {
+			gomega.Eventually(func(g gomega.Gomega) {
 				evictedWorkloads = util.FilterEvictedWorkloads(ctx, k8sClient, betaWls...)
-				return len(evictedWorkloads)
-			}, util.Timeout, util.Interval).Should(gomega.Equal(1), "Number of evicted workloads")
+				g.Expect(evictedWorkloads).Should(gomega.HaveLen(1), "Number of evicted workloads")
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 
 			ginkgo.By("Finishing eviction for first set of preempted workloads")
 			util.FinishEvictionForWorkloads(ctx, k8sClient, evictedWorkloads...)
 			util.ExpectWorkloadsToBeAdmittedCount(ctx, k8sClient, 1, alphaWl, gammaWl)
 
-			gomega.Eventually(func() int {
+			gomega.Eventually(func(g gomega.Gomega) {
 				evictedWorkloads = util.FilterEvictedWorkloads(ctx, k8sClient, betaWls...)
-				return len(evictedWorkloads)
-			}, util.Timeout, util.Interval).Should(gomega.Equal(2), "Number of evicted workloads")
+				g.Expect(evictedWorkloads).Should(gomega.HaveLen(2), "Number of evicted workloads")
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 
 			ginkgo.By("Finishing eviction for second set of preempted workloads")
 			util.FinishEvictionForWorkloads(ctx, k8sClient, evictedWorkloads...)
@@ -722,18 +718,13 @@ var _ = ginkgo.Describe("Preemption", func() {
 		})
 	})
 
-	ginkgo.Context("When lending limit enabled", func() {
+	ginkgo.Context("With lending limit", func() {
 		var (
 			prodCQ *kueue.ClusterQueue
 			devCQ  *kueue.ClusterQueue
 		)
 
-		ginkgo.BeforeEach(func() {
-			_ = features.SetEnable(features.LendingLimit, true)
-		})
-
 		ginkgo.AfterEach(func() {
-			_ = features.SetEnable(features.LendingLimit, false)
 			gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, prodCQ, true)
 			if devCQ != nil {

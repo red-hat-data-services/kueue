@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/google/go-cmp/cmp/cmpopts"
+	kfmpi "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
+	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -18,9 +20,18 @@ import (
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
-	visibility "sigs.k8s.io/kueue/apis/visibility/v1alpha1"
+	visibility "sigs.k8s.io/kueue/apis/visibility/v1beta1"
 	kueueclientset "sigs.k8s.io/kueue/client-go/clientset/versioned"
-	visibilityv1alpha1 "sigs.k8s.io/kueue/client-go/clientset/versioned/typed/visibility/v1alpha1"
+	visibilityv1beta1 "sigs.k8s.io/kueue/client-go/clientset/versioned/typed/visibility/v1beta1"
+)
+
+const (
+	// E2eTestSleepImageOld is the image used for testing rolling update.
+	E2eTestSleepImageOld = "gcr.io/k8s-staging-perf-tests/sleep:v0.0.3@sha256:00ae8e01dd4439edfb7eb9f1960ac28eba16e952956320cce7f2ac08e3446e6b"
+	// E2eTestSleepImage is the image used for testing.
+	E2eTestSleepImage = "gcr.io/k8s-staging-perf-tests/sleep:v0.1.0@sha256:8d91ddf9f145b66475efda1a1b52269be542292891b5de2a7fad944052bab6ea"
+	// E2eTTestCurlImage is the image used for testing with curl execution.
+	E2eTTestCurlImage = "curlimages/curl:8.11.0@sha256:6324a8b41a7f9d80db93c7cf65f025411f55956c6b248037738df3bfca32410c"
 )
 
 const (
@@ -37,9 +48,6 @@ const (
 	kueueNamespace = "kueue-system"
 
 	undefinedNamespace = "undefined"
-
-	// E2eTTestCurlImage is the image used for testing with curl execution.
-	E2eTTestCurlImage = "curlimages/curl:8.11.0@sha256:6324a8b41a7f9d80db93c7cf65f025411f55956c6b248037738df3bfca32410c"
 )
 
 func CreateClientUsingCluster(kContext string) (client.WithWatch, *rest.Config) {
@@ -62,12 +70,18 @@ func CreateClientUsingCluster(kContext string) (client.WithWatch, *rest.Config) 
 	err = jobset.AddToScheme(scheme.Scheme)
 	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
 
+	err = kftraining.AddToScheme(scheme.Scheme)
+	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
+
+	err = kfmpi.AddToScheme(scheme.Scheme)
+	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
+
 	client, err := client.NewWithWatch(cfg, client.Options{Scheme: scheme.Scheme})
 	gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred())
 	return client, cfg
 }
 
-func CreateVisibilityClient(user string) visibilityv1alpha1.VisibilityV1alpha1Interface {
+func CreateVisibilityClient(user string) visibilityv1beta1.VisibilityV1beta1Interface {
 	cfg, err := config.GetConfigWithContext("")
 	if err != nil {
 		fmt.Printf("unable to get kubeconfig: %s", err)
@@ -84,7 +98,7 @@ func CreateVisibilityClient(user string) visibilityv1alpha1.VisibilityV1alpha1In
 		fmt.Printf("unable to create kueue clientset: %s", err)
 		os.Exit(1)
 	}
-	visibilityClient := kueueClient.VisibilityV1alpha1()
+	visibilityClient := kueueClient.VisibilityV1beta1()
 	return visibilityClient
 }
 
@@ -110,8 +124,24 @@ func WaitForKueueAvailability(ctx context.Context, k8sClient client.Client) {
 func WaitForJobSetAvailability(ctx context.Context, k8sClient client.Client) {
 	_, skipJobsetAvailabilityCheck := os.LookupEnv("SKIP_JOB_SET_AVAILABILITY_CHECK")
 	if !skipJobsetAvailabilityCheck {
-		kcmKey := types.NamespacedName{Namespace: "jobset-system", Name: "jobset-controller-manager"}
-		waitForOperatorAvailability(ctx, k8sClient, kcmKey)
+		jcmKey := types.NamespacedName{Namespace: "jobset-system", Name: "jobset-controller-manager"}
+		waitForOperatorAvailability(ctx, k8sClient, jcmKey)
+	}
+}
+
+func WaitForKubeFlowTrainingOperatorAvailability(ctx context.Context, k8sClient client.Client) {
+	_, skipTrainingOperatorAvailabilityCheck := os.LookupEnv("SKIP_TRAINING_OPERATOR_AVAILABILITY_CHECK")
+	if !skipTrainingOperatorAvailabilityCheck {
+		kftoKey := types.NamespacedName{Namespace: "kubeflow", Name: "training-operator"}
+		waitForOperatorAvailability(ctx, k8sClient, kftoKey)
+	}
+}
+
+func WaitForKubeFlowMPIOperatorAvailability(ctx context.Context, k8sClient client.Client) {
+	_, skipMPIOperatorAvailabilityCheck := os.LookupEnv("SKIP_MPI_OPERATOR_AVAILABILITY_CHECK")
+	if !skipMPIOperatorAvailabilityCheck {
+		kftoKey := types.NamespacedName{Namespace: "mpi-operator", Name: "mpi-operator"}
+		waitForOperatorAvailability(ctx, k8sClient, kftoKey)
 	}
 }
 

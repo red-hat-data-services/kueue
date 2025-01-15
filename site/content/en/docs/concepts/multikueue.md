@@ -1,15 +1,17 @@
 ---
 title: "MultiKueue"
-date: 2024-02-26
+date: 2024-11-11
 weight: 8
 description: >
   Kueue multi cluster job dispatching.
 ---
 
-{{< feature-state state="alpha" for_version="v0.6" >}}
+{{< feature-state state="beta" for_version="v0.9" >}}
 
-{{% alert title="Warning" color="warning" %}}
-MultiKueue is currently an alpha feature and disabled by default. Check the [Installation](/docs/installation/#change-the-feature-gates-configuration) guide for details on feature gate configuration.
+{{% alert title="Note" color="primary" %}}
+`MultiKueue` is currently a beta feature and is enabled by default.
+
+You can disable it by editing the `MultiKueue` feature gate. Check the [Installation](/docs/installation/#change-the-feature-gates-configuration) guide for details on feature gate configuration.
 {{% /alert %}}
 
 
@@ -60,13 +62,19 @@ Known Limitations:
 
 #### MultiKueueBatchJobWithManagedBy enabled
 
-When you want to submit Job to a ClusterQueue with a MultiKueue admission check, you should set the `spec.managedBy` field to `kueue.x-k8s.io/multikueue`, otherwise the admission check controller will `Reject` the workload causing it to be marked as `Finished` with an error indicating the cause.
+When you want to submit Job to a ClusterQueue with a MultiKueue admission check, you should set the `spec.managedBy` field to `kueue.x-k8s.io/multikueue`, otherwise the admission check controller will `Reject` the workload.
 
 The `managedBy` field is available as an Alpha feature staring Kubernetes 1.30.0, check the [Delegation of managing a Job object to external controller](https://kubernetes.io/docs/concepts/workloads/controllers/job/#delegation-of-managing-a-job-object-to-external-controller) for details.
 
 ### JobSet
 
 We recommend using JobSet v0.5.1 or newer.
+
+### Kubeflow
+
+The supported version of the Kubeflow Training Operator is v1.7.0, or a newer version.
+The Management cluster should only install the CRDs and not the package itself. 
+On the other hand, the Worker cluster should install the full kubeflow operator.
 
 ## Submitting Jobs
 In a [configured MultiKueue environment](/docs/tasks/manage/setup_multikueue), you can submit any MultiKueue supported job to the Manager cluster, targeting a ClusterQueue configured for Multikueue.

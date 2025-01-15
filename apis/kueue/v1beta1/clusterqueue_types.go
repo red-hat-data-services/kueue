@@ -22,6 +22,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// ClusterQueue Active condition reasons.
+const (
+	ClusterQueueActiveReasonTerminating                                     = "Terminating"
+	ClusterQueueActiveReasonStopped                                         = "Stopped"
+	ClusterQueueActiveReasonFlavorNotFound                                  = "FlavorNotFound"
+	ClusterQueueActiveReasonAdmissionCheckNotFound                          = "AdmissionCheckNotFound"
+	ClusterQueueActiveReasonAdmissionCheckInactive                          = "AdmissionCheckInactive"
+	ClusterQueueActiveReasonMultipleSingleInstanceControllerAdmissionChecks = "MultipleSingleInstanceControllerAdmissionChecks"
+	ClusterQueueActiveReasonFlavorIndependentAdmissionCheckAppliedPerFlavor = "FlavorIndependentAdmissionCheckAppliedPerFlavor"
+	ClusterQueueActiveReasonMultipleMultiKueueAdmissionChecks               = "MultipleMultiKueueAdmissionChecks"
+	ClusterQueueActiveReasonMultiKueueAdmissionCheckAppliedPerFlavor        = "MultiKueueAdmissionCheckAppliedPerFlavor"
+	ClusterQueueActiveReasonNotSupportedWithTopologyAwareScheduling         = "NotSupportedWithTopologyAwareScheduling"
+	ClusterQueueActiveReasonTopologyNotFound                                = "TopologyNotFound"
+	ClusterQueueActiveReasonUnknown                                         = "Unknown"
+	ClusterQueueActiveReasonReady                                           = "Ready"
+)
+
 // ClusterQueueSpec defines the desired state of ClusterQueue
 // +kubebuilder:validation:XValidation:rule="!has(self.cohort) && has(self.resourceGroups) ? self.resourceGroups.all(rg, rg.flavors.all(f, f.resources.all(r, !has(r.borrowingLimit)))) : true", message="borrowingLimit must be nil when cohort is empty"
 type ClusterQueueSpec struct {
@@ -235,8 +252,7 @@ type ResourceQuota struct {
 	// all the nominalQuota can be borrowed by other clusterQueues in the cohort.
 	// If not null, it must be non-negative.
 	// lendingLimit must be null if spec.cohort is empty.
-	// This field is in alpha stage. To be able to use this field,
-	// enable the feature gate LendingLimit, which is disabled by default.
+	// This field is in beta stage and is enabled by default.
 	// +optional
 	LendingLimit *resource.Quantity `json:"lendingLimit,omitempty"`
 }
@@ -290,6 +306,9 @@ type ClusterQueueStatus struct {
 
 	// PendingWorkloadsStatus contains the information exposed about the current
 	// status of the pending workloads in the cluster queue.
+	// Deprecated: This field will be removed on v1beta2, use VisibilityOnDemand
+	// (https://kueue.sigs.k8s.io/docs/tasks/manage/monitor_pending_workloads/pending_workloads_on_demand/)
+	// instead.
 	// +optional
 	PendingWorkloadsStatus *ClusterQueuePendingWorkloadsStatus `json:"pendingWorkloadsStatus"`
 
@@ -410,12 +429,16 @@ type ClusterQueuePreemption struct {
 	// their nominal quota. The possible values are:
 	//
 	// - `Never` (default): do not preempt Workloads in the cohort.
-	// - `LowerPriority`: if the pending Workload fits within the nominal
-	//   quota of its ClusterQueue, only preempt Workloads in the cohort that have
-	//   lower priority than the pending Workload.
-	// - `Any`: if the pending Workload fits within the nominal quota of its
-	//   ClusterQueue, preempt any Workload in the cohort, irrespective of
-	//   priority.
+	// - `LowerPriority`: **Classic Preemption** if the pending Workload
+	//   fits within the nominal quota of its ClusterQueue, only preempt
+	//   Workloads in the cohort that have lower priority than the pending
+	//   Workload. **Fair Sharing** only preempt Workloads in the cohort that
+	//   have lower priority than the pending Workload and that satisfy the
+	//   fair sharing preemptionStategies.
+	// - `Any`: **Classic Preemption** if the pending Workload fits within
+	//    the nominal quota of its ClusterQueue, preempt any Workload in the
+	//    cohort, irrespective of priority. **Fair Sharing** preempt Workloads
+	//    in the cohort that satisfy the fair sharing preemptionStrategies.
 	//
 	// +kubebuilder:default=Never
 	// +kubebuilder:validation:Enum=Never;LowerPriority;Any

@@ -30,6 +30,7 @@ import (
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/cli-runtime/pkg/printers"
+	"k8s.io/kubectl/pkg/util/templates"
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/kueue/apis/kueue/v1beta1"
@@ -40,26 +41,6 @@ import (
 )
 
 const (
-	cqLong    = `Creates a ClusterQueue with the given name.`
-	cqExample = `  # Create a ClusterQueue 
-  kueuectl create clusterqueue my-cluster-queue
-  
-  # Create a ClusterQueue with cohort, namespace selector and other details
-  kueuectl create clusterqueue my-cluster-queue \
-  	--cohort=cohortname \
-	--queuing-strategy=StrictFIFO \
-	--namespace-selector=fooX=barX,fooY=barY \
-	--reclaim-within-cohort=Any \
-	--preemption-within-cluster-queue=LowerPriority
-  
-  # Create a ClusterQueue with nominal quota and one resource flavor named alpha
-  kueuectl create clusterqueue my-cluster-queue --nominal-quota=alpha:cpu=9;memory=36Gi
-  
-  # Create a ClusterQueue with multiple resource flavors named alpha and beta
-  kueuectl create clusterqueue my-cluster-queue \
-  	--nominal-quota=alpha:cpu=9;memory=36Gi;nvidia.com/gpu=10,beta:cpu=18;memory=72Gi;nvidia.com/gpu=20, \
-	--borrowing-limit=alpha:cpu=1;memory=1Gi;nvidia.com/gpu=1,beta:cpu=2;memory=2Gi;nvidia.com/gpu=2 \
-	--lending-limit=alpha:cpu=1;memory=1Gi;nvidia.com/gpu=1,beta:cpu=2;memory=2Gi;nvidia.com/gpu=2`
 	cohort                       = "cohort"
 	queuingStrategy              = "queuing-strategy"
 	namespaceSelector            = "namespace-selector"
@@ -68,6 +49,32 @@ const (
 	nominalQuota                 = "nominal-quota"
 	borrowingLimit               = "borrowing-limit"
 	lendingLimit                 = "lending-limit"
+)
+
+var (
+	cqLong    = templates.LongDesc(`Creates a ClusterQueue with the given name.`)
+	cqExample = templates.Examples(`
+		# Create a ClusterQueue
+  		kueuectl create clusterqueue my-cluster-queue
+  
+  		# Create a ClusterQueue with cohort, namespace selector and other details
+		kueuectl create clusterqueue my-cluster-queue \
+		--cohort cohortname \
+		--queuing-strategy StrictFIFO \
+		--namespace-selector fooX=barX,fooY=barY \
+		--reclaim-within-cohort Any \
+		--preemption-within-cluster-queue LowerPriority
+  
+  		# Create a ClusterQueue with nominal quota and one resource flavor named alpha
+  		kueuectl create clusterqueue my-cluster-queue --nominal-quota "alpha:cpu=9;memory=36Gi"
+  
+		# Create a ClusterQueue with multiple resource flavors named alpha and beta
+		kueuectl create clusterqueue my-cluster-queue \
+		--cohort cohortname \
+		--nominal-quota "alpha:cpu=9;memory=36Gi;nvidia.com/gpu=10,beta:cpu=18;memory=72Gi;nvidia.com/gpu=20" \
+		--borrowing-limit "alpha:cpu=1;memory=1Gi;nvidia.com/gpu=1,beta:cpu=2;memory=2Gi;nvidia.com/gpu=2" \
+		--lending-limit "alpha:cpu=1;memory=1Gi;nvidia.com/gpu=1,beta:cpu=2;memory=2Gi;nvidia.com/gpu=2"
+	`)
 )
 
 var (
@@ -120,15 +127,15 @@ func NewClusterQueueCmd(clientGetter util.ClientGetter, streams genericiooptions
 
 	cmd := &cobra.Command{
 		Use: "clusterqueue NAME " +
-			"[--cohort=cohortname] " +
-			"[--queuing-strategy=StrictFIFO|BestEffortFIFO] " +
-			"[--namespace-selector=selector] " +
-			"[--reclaim-within-cohort=Never|Any|LowerPriority|LowerOrNewerEqualPriority] " +
-			"[--preemption-within-cluster-queue=Never|Any|LowerPriority|LowerOrNewerEqualPriority] " +
-			"[--nominal-quota=rfname1:resource1=value;resource2=value;resource3=value,rfname2:resource1=value;resource2=value] " +
-			"[--borrowing-limit=rfname1:resource1=value;resource2=value;resource3=value,rfname2:resource1=value;resource2=value] " +
-			"[--lending-limit=rfname1:resource1=value;resource2=value;resource3=value,rfname2:resource1=value;resource2=value] " +
-			"[--dry-run=server|client|none]",
+			"[--cohort COHORT_NAME] " +
+			"[--queuing-strategy QUEUEING_STRATEGY] " +
+			"[--namespace-selector KEY=VALUE] " +
+			"[--reclaim-within-cohort PREEMPTION_POLICY] " +
+			"[--preemption-within-cluster-queue PREEMPTION_POLICY] " +
+			"[--nominal-quota RESOURCE_FLAVOR:RESOURCE=VALUE] " +
+			"[--borrowing-limit RESOURCE_FLAVOR:RESOURCE=VALUE] " +
+			"[--lending-limit RESOURCE_FLAVOR:RESOURCE=VALUE] " +
+			"[--dry-run STRATEGY]",
 		// To do not add "[flags]" suffix on the end of usage line
 		DisableFlagsInUseLine: true,
 		Aliases:               []string{"cq"},
@@ -402,10 +409,10 @@ func parseKeyValue(str, sep string) (string, string) {
 func mergeResourcesByFlavor(resourceGroups []v1beta1.ResourceGroup) ([]v1beta1.ResourceGroup, error) {
 	var mergedResources []v1beta1.ResourceGroup
 
-	indexByFlavor := make(map[string]int)
+	indexByFlavor := make(map[v1beta1.ResourceFlavorReference]int)
 	var index int
 	for _, rg := range resourceGroups {
-		flavorName := string(rg.Flavors[0].Name)
+		flavorName := rg.Flavors[0].Name
 		idx, found := indexByFlavor[flavorName]
 		if !found {
 			mergedResources = append(mergedResources, rg)

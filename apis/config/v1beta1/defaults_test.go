@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	componentconfigv1alpha1 "k8s.io/component-base/config/v1alpha1"
 	"k8s.io/utils/ptr"
@@ -79,6 +80,15 @@ func TestSetDefaults_Configuration(t *testing.T) {
 			MaxCount: 10,
 		},
 	}
+	defaultManagedJobsNamespaceSelector := &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{
+				Key:      "kubernetes.io/metadata.name",
+				Operator: metav1.LabelSelectorOpNotIn,
+				Values:   []string{"kube-system", "kueue-system"},
+			},
+		},
+	}
 
 	overwriteNamespaceIntegrations := &Integrations{
 		Frameworks: []string{defaultJobFrameworkName},
@@ -93,6 +103,16 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				},
 			},
 			PodSelector: &metav1.LabelSelector{},
+		},
+	}
+
+	overwriteNamespaceSelector := &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{
+			{
+				Key:      "kubernetes.io/metadata.name",
+				Operator: metav1.LabelSelectorOpNotIn,
+				Values:   []string{"kube-system", overwriteNamespace},
+			},
 		},
 	}
 
@@ -121,10 +141,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"defaulting ControllerManager": {
@@ -162,10 +183,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"should not default ControllerManager": {
@@ -219,10 +241,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"should not set LeaderElectionID": {
@@ -260,10 +283,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"defaulting InternalCertManagement": {
@@ -278,10 +302,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					WebhookServiceName: ptr.To(DefaultWebhookServiceName),
 					WebhookSecretName:  ptr.To(DefaultWebhookSecretName),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     overwriteNamespaceIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 overwriteNamespaceIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
 			},
 		},
 		"should not default InternalCertManagement": {
@@ -297,10 +322,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     overwriteNamespaceIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 overwriteNamespaceIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
 			},
 		},
 		"should not default values in custom ClientConnection": {
@@ -324,9 +350,10 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					QPS:   ptr.To[float32](123.0),
 					Burst: ptr.To[int32](456),
 				},
-				Integrations:    overwriteNamespaceIntegrations,
-				QueueVisibility: defaultQueueVisibility,
-				MultiKueue:      defaultMultiKueue,
+				Integrations:                 overwriteNamespaceIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
 			},
 		},
 		"should default empty custom ClientConnection": {
@@ -343,10 +370,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     overwriteNamespaceIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 overwriteNamespaceIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: overwriteNamespaceSelector,
 			},
 		},
 		"defaulting waitForPodsReady values": {
@@ -374,10 +402,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"set waitForPodsReady.blockAdmission to false when enable is false": {
@@ -405,10 +434,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"respecting provided waitForPodsReady values": {
@@ -442,10 +472,11 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"integrations": {
@@ -468,8 +499,9 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					Frameworks: []string{"a", "b"},
 					PodOptions: defaultIntegrations.PodOptions,
 				},
-				QueueVisibility: defaultQueueVisibility,
-				MultiKueue:      defaultMultiKueue,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"queue visibility": {
@@ -498,7 +530,8 @@ func TestSetDefaults_Configuration(t *testing.T) {
 						MaxCount: 0,
 					},
 				},
-				MultiKueue: defaultMultiKueue,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"multiKueue": {
@@ -526,6 +559,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					Origin:            ptr.To("multikueue-manager1"),
 					WorkerLostTimeout: &metav1.Duration{Duration: time.Minute},
 				},
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"multiKueue GCInterval 0": {
@@ -552,6 +586,7 @@ func TestSetDefaults_Configuration(t *testing.T) {
 					Origin:            ptr.To("multikueue-manager1"),
 					WorkerLostTimeout: &metav1.Duration{Duration: 15 * time.Minute},
 				},
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 			},
 		},
 		"add default fair sharing configuration when enabled": {
@@ -569,13 +604,45 @@ func TestSetDefaults_Configuration(t *testing.T) {
 				InternalCertManagement: &InternalCertManagement{
 					Enable: ptr.To(false),
 				},
-				ClientConnection: defaultClientConnection,
-				Integrations:     defaultIntegrations,
-				QueueVisibility:  defaultQueueVisibility,
-				MultiKueue:       defaultMultiKueue,
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
 				FairSharing: &FairSharing{
 					Enable:               true,
 					PreemptionStrategies: []PreemptionStrategy{LessThanOrEqualToFinalShare, LessThanInitialShare},
+				},
+			},
+		},
+		"resources.transformations strategy": {
+			original: &Configuration{
+				InternalCertManagement: &InternalCertManagement{
+					Enable: ptr.To(false),
+				},
+				Resources: &Resources{
+					Transformations: []ResourceTransformation{
+						{Input: corev1.ResourceCPU},
+						{Input: corev1.ResourceMemory, Strategy: ptr.To(Replace)},
+					},
+				},
+			},
+			want: &Configuration{
+				Namespace:         ptr.To(DefaultNamespace),
+				ControllerManager: defaultCtrlManagerConfigurationSpec,
+				InternalCertManagement: &InternalCertManagement{
+					Enable: ptr.To(false),
+				},
+				ClientConnection:             defaultClientConnection,
+				Integrations:                 defaultIntegrations,
+				QueueVisibility:              defaultQueueVisibility,
+				MultiKueue:                   defaultMultiKueue,
+				ManagedJobsNamespaceSelector: defaultManagedJobsNamespaceSelector,
+				Resources: &Resources{
+					Transformations: []ResourceTransformation{
+						{Input: corev1.ResourceCPU, Strategy: ptr.To(DefaultResourceTransformationStrategy)},
+						{Input: corev1.ResourceMemory, Strategy: ptr.To(Replace)},
+					},
 				},
 			},
 		},

@@ -37,7 +37,7 @@ Kueue. Sometimes referred to as _job_.
 ### [Workload Priority Class](/docs/concepts/workload_priority_class)
 
 `WorkloadPriorityClass` defines a priority class for a workload,
-independently from [pod priority](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/).  
+independently from [pod priority](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/).
 This priority value from a `WorkloadPriorityClass` is only used for managing the queueing and preemption of [Workloads](#workload).
 
 ### [Admission Check](/docs/concepts/admission_check)
@@ -45,6 +45,11 @@ This priority value from a `WorkloadPriorityClass` is only used for managing the
 A mechanism allowing internal or external components to influence the timing of workloads admission.
 
 ![Components](/images/queueing-components.svg)
+
+### [Topology Aware Scheduling](/docs/concepts/topology_aware_scheduling)
+
+A mechanism allowing to schedule Workloads optimizing Pod placement for
+network throuput between the Pods.
 
 ## Glossary
 
@@ -68,7 +73,7 @@ A _cohort_ is a group of ClusterQueues that can borrow unused quota from each ot
 
 ### Queueing
 
-_Queueing_ is the state of a Workload since the time it is created until it Kueue admits it on a ClusterQueue.
+_Queueing_ is the state of a Workload since the time it is created until Kueue admits it on a ClusterQueue.
 Typically, the Workload will compete with other Workloads for available
 quota based on the fair sharing rules of the ClusterQueue.
 

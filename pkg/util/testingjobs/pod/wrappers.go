@@ -28,7 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
-	"sigs.k8s.io/kueue/pkg/controller/constants"
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
+	"sigs.k8s.io/kueue/pkg/constants"
+	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
+	utilpod "sigs.k8s.io/kueue/pkg/util/pod"
 )
 
 // PodWrapper wraps a Pod.
@@ -74,6 +77,20 @@ func (p *PodWrapper) MakeGroup(count int) []*corev1.Pod {
 	return pods
 }
 
+// MakeIndexedGroup returns multiple indexed pods that form a pod group, based on the original wrapper.
+func (p *PodWrapper) MakeIndexedGroup(count int) []*corev1.Pod {
+	var pods []*corev1.Pod
+	for i := 0; i < count; i++ {
+		pod := p.Clone().
+			Group(p.Pod.Name).
+			GroupTotalCount(strconv.Itoa(count)).
+			GroupIndex(strconv.Itoa(i))
+		pod.Pod.Name += fmt.Sprintf("-%d", i)
+		pods = append(pods, pod.Obj())
+	}
+	return pods
+}
+
 // Clone returns deep copy of the Pod.
 func (p *PodWrapper) Clone() *PodWrapper {
 	return &PodWrapper{Pod: *p.DeepCopy()}
@@ -81,7 +98,7 @@ func (p *PodWrapper) Clone() *PodWrapper {
 
 // Queue updates the queue name of the Pod
 func (p *PodWrapper) Queue(q string) *PodWrapper {
-	return p.Label(constants.QueueLabel, q)
+	return p.Label(controllerconsts.QueueLabel, q)
 }
 
 // PriorityClass updates the priority class name of the Pod
@@ -106,6 +123,11 @@ func (p *PodWrapper) GroupTotalCount(gtc string) *PodWrapper {
 	return p.Annotation("kueue.x-k8s.io/pod-group-total-count", gtc)
 }
 
+// GroupIndex updates the pod.GroupIndexLabel of the Pod
+func (p *PodWrapper) GroupIndex(index string) *PodWrapper {
+	return p.Label(kueuealpha.PodGroupPodIndexLabel, index)
+}
+
 // Label sets the label of the Pod
 func (p *PodWrapper) Label(k, v string) *PodWrapper {
 	if p.Labels == nil {
@@ -120,6 +142,10 @@ func (p *PodWrapper) Annotation(key, content string) *PodWrapper {
 	return p
 }
 
+func (p *PodWrapper) PodGroupServingAnnotation(enabled bool) *PodWrapper {
+	return p.Annotation("kueue.x-k8s.io/pod-group-serving", strconv.FormatBool(enabled))
+}
+
 // RoleHash updates the pod.RoleHashAnnotation of the pod
 func (p *PodWrapper) RoleHash(h string) *PodWrapper {
 	return p.Annotation("kueue.x-k8s.io/role-hash", h)
@@ -127,10 +153,17 @@ func (p *PodWrapper) RoleHash(h string) *PodWrapper {
 
 // KueueSchedulingGate adds kueue scheduling gate to the Pod
 func (p *PodWrapper) KueueSchedulingGate() *PodWrapper {
-	if p.Spec.SchedulingGates == nil {
-		p.Spec.SchedulingGates = make([]corev1.PodSchedulingGate, 0)
-	}
-	p.Spec.SchedulingGates = append(p.Spec.SchedulingGates, corev1.PodSchedulingGate{Name: "kueue.x-k8s.io/admission"})
+	return p.Gate("kueue.x-k8s.io/admission")
+}
+
+// TopologySchedulingGate adds kueue scheduling gate to the Pod
+func (p *PodWrapper) TopologySchedulingGate() *PodWrapper {
+	return p.Gate(kueuealpha.TopologySchedulingGate)
+}
+
+// Gate adds kueue scheduling gate to the Pod by the gate name
+func (p *PodWrapper) Gate(gateName string) *PodWrapper {
+	utilpod.Gate(&p.Pod, gateName)
 	return p
 }
 
@@ -145,7 +178,7 @@ func (p *PodWrapper) Finalizer(f string) *PodWrapper {
 
 // KueueFinalizer adds kueue finalizer to the Pod
 func (p *PodWrapper) KueueFinalizer() *PodWrapper {
-	return p.Finalizer("kueue.x-k8s.io/managed")
+	return p.Finalizer(constants.ManagedByKueueLabel)
 }
 
 // NodeSelector adds a node selector to the Pod.

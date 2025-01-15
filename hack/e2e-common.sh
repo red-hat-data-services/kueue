@@ -19,10 +19,25 @@ export GINKGO="$ROOT_DIR"/bin/ginkgo
 export KIND="$ROOT_DIR"/bin/kind
 export YQ="$ROOT_DIR"/bin/yq
 
+export KIND_VERSION="${E2E_KIND_VERSION/"kindest/node:v"/}"
+
 if [[ -n ${JOBSET_VERSION:-} ]]; then
     export JOBSET_MANIFEST="https://github.com/kubernetes-sigs/jobset/releases/download/${JOBSET_VERSION}/manifests.yaml"
     export JOBSET_IMAGE=registry.k8s.io/jobset/jobset:${JOBSET_VERSION}
     export JOBSET_CRDS=${ROOT_DIR}/dep-crds/jobset-operator/
+fi
+
+if [[ -n ${KUBEFLOW_VERSION:-} ]]; then
+    export KUBEFLOW_MANIFEST_MANAGER=${ROOT_DIR}/test/e2e/config/multikueue/manager
+    export KUBEFLOW_MANIFEST_WORKER=${ROOT_DIR}/test/e2e/config/multikueue/worker
+    KUBEFLOW_IMAGE_VERSION=$($KUSTOMIZE build "$KUBEFLOW_MANIFEST_WORKER" | $YQ e 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image | split(":") | .[1]')
+    export KUBEFLOW_IMAGE_VERSION
+    export KUBEFLOW_IMAGE=kubeflow/training-operator:${KUBEFLOW_IMAGE_VERSION}
+fi
+
+if [[ -n ${KUBEFLOW_MPI_VERSION:-} ]]; then
+    export KUBEFLOW_MPI_MANIFEST="https://raw.githubusercontent.com/kubeflow/mpi-operator/${KUBEFLOW_MPI_VERSION}/deploy/v2beta1/mpi-operator.yaml"
+    export KUBEFLOW_MPI_IMAGE=mpioperator/mpi-operator:${KUBEFLOW_MPI_VERSION/#v}
 fi
 
 # sleep image to use for testing.
@@ -33,23 +48,24 @@ E2E_TEST_SLEEP_IMAGE_WITHOUT_SHA=${E2E_TEST_SLEEP_IMAGE%%@*}
 export E2E_TEST_CURL_IMAGE=curlimages/curl:8.11.0@sha256:6324a8b41a7f9d80db93c7cf65f025411f55956c6b248037738df3bfca32410c
 E2E_TEST_CURL_IMAGE_WITHOUT_SHA=${E2E_TEST_CURL_IMAGE%%@*}
 
+
 # $1 - cluster name
 function cluster_cleanup {
-	kubectl config use-context kind-$1
-        $KIND export logs $ARTIFACTS --name $1 || true
-        kubectl describe pods -n kueue-system > $ARTIFACTS/$1-kueue-system-pods.log || true
-        kubectl describe pods > $ARTIFACTS/$1-default-pods.log || true
-        $KIND delete cluster --name $1
+	kubectl config use-context "kind-$1"
+        $KIND export logs "$ARTIFACTS" --name "$1" || true
+        kubectl describe pods -n kueue-system > "$ARTIFACTS/$1-kueue-system-pods.log" || true
+        kubectl describe pods > "$ARTIFACTS/$1-default-pods.log" || true
+        $KIND delete cluster --name "$1"
 }
 
 # $1 cluster name
 # $2 cluster kind config
 function cluster_create {
-        $KIND create cluster --name $1 --image $E2E_KIND_VERSION --config $2 --wait 1m -v 5  > $ARTIFACTS/$1-create.log 2>&1 \
-		||  { echo "unable to start the $1 cluster "; cat $ARTIFACTS/$1-create.log ; }
-	kubectl config use-context kind-$1
-        kubectl get nodes > $ARTIFACTS/$1-nodes.log || true
-        kubectl describe pods -n kube-system > $ARTIFACTS/$1-system-pods.log || true
+        $KIND create cluster --name "$1" --image "$E2E_KIND_VERSION" --config "$2" --wait 1m -v 5  > "$ARTIFACTS/$1-create.log" 2>&1 \
+		||  { echo "unable to start the $1 cluster "; cat "$ARTIFACTS/$1-create.log" ; }
+	kubectl config use-context "kind-$1"
+        kubectl get nodes > "$ARTIFACTS/$1-nodes.log" || true
+        kubectl describe pods -n kube-system > "$ARTIFACTS/$1-system-pods.log" || true
 }
 
 function prepare_docker_images {
@@ -86,24 +102,43 @@ function cluster_kind_load {
 # $1 cluster
 # $2 image
 function cluster_kind_load_image {
-        $KIND load docker-image $2 --name $1
+    $KIND load docker-image "$2" --name "$1"
 }
 
 # $1 cluster
 function cluster_kueue_deploy {
-    kubectl config use-context kind-${1}
-    kubectl apply --server-side -k test/e2e/config
+    kubectl config use-context "kind-${1}"
+    if [ "${KIND_VERSION%.*}" = "1.28" ]; then
+        kubectl apply --server-side -k test/e2e/config/1_28
+    else
+        kubectl apply --server-side -k test/e2e/config/default
+    fi
 }
 
 #$1 - cluster name
 function install_jobset {
-    cluster_kind_load_image ${1} ${JOBSET_IMAGE}
-    kubectl config use-context kind-${1}
-    kubectl apply --server-side -f ${JOBSET_MANIFEST}
+    cluster_kind_load_image "${1}" "${JOBSET_IMAGE}"
+    kubectl config use-context "kind-${1}"
+    kubectl apply --server-side -f "${JOBSET_MANIFEST}"
 }
 
-export INITIAL_IMAGE=$($YQ '.images[] | select(.name == "controller") | [.newName, .newTag] | join(":")' config/components/manager/kustomization.yaml)
+#$1 - cluster name
+function install_kubeflow {
+    cluster_kind_load_image "${1}" "${KUBEFLOW_IMAGE}"
+    kubectl config use-context "kind-${1}"
+    kubectl apply -k "${KUBEFLOW_MANIFEST_WORKER}"
+}
+
+#$1 - cluster name
+function install_mpi {
+    cluster_kind_load_image "${1}" "${KUBEFLOW_MPI_IMAGE/#v}"
+    kubectl config use-context "kind-${1}"
+    kubectl apply --server-side -f "${KUBEFLOW_MPI_MANIFEST}"
+}
+
+INITIAL_IMAGE=$($YQ '.images[] | select(.name == "controller") | [.newName, .newTag] | join(":")' config/components/manager/kustomization.yaml)
+export INITIAL_IMAGE
 
 function restore_managers_image {
-    (cd config/components/manager && $KUSTOMIZE edit set image controller=$INITIAL_IMAGE)
+    (cd config/components/manager && $KUSTOMIZE edit set image controller="$INITIAL_IMAGE")
 }

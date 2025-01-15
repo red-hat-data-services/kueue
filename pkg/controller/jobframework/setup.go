@@ -30,8 +30,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
-
-	"sigs.k8s.io/kueue/pkg/controller/jobs/noop"
 )
 
 const (
@@ -58,6 +56,10 @@ func SetupControllers(ctx context.Context, mgr ctrl.Manager, log logr.Logger, op
 
 func (m *integrationManager) setupControllers(ctx context.Context, mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 	options := ProcessOptions(opts...)
+
+	if err := m.checkEnabledListDependencies(options.EnabledFrameworks); err != nil {
+		return fmt.Errorf("check enabled frameworks list: %w", err)
+	}
 
 	for fwkName := range options.EnabledExternalFrameworks {
 		if err := RegisterExternalJobType(fwkName); err != nil {
@@ -96,7 +98,7 @@ func (m *integrationManager) setupControllers(ctx context.Context, mgr ctrl.Mana
 				}
 			}
 		}
-		if err := noop.SetupWebhook(mgr, cb.JobType); err != nil {
+		if err := setupNoopWebhook(mgr, cb.JobType); err != nil {
 			return fmt.Errorf("%s: unable to create noop webhook: %w", fwkNamePrefix, err)
 		}
 		return nil
@@ -119,7 +121,7 @@ func (m *integrationManager) setupControllerAndWebhook(mgr ctrl.Manager, name st
 }
 
 func waitForAPI(ctx context.Context, mgr ctrl.Manager, log logr.Logger, gvk schema.GroupVersionKind, action func()) {
-	rateLimiter := workqueue.NewItemExponentialFailureRateLimiter(baseBackoffWaitForIntegration, maxBackoffWaitForIntegration)
+	rateLimiter := workqueue.NewTypedItemExponentialFailureRateLimiter[string](baseBackoffWaitForIntegration, maxBackoffWaitForIntegration)
 	item := gvk.String()
 	for {
 		err := restMappingExists(mgr, gvk)

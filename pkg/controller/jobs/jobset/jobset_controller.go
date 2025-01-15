@@ -18,8 +18,10 @@ package jobset
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
+	batchv1 "k8s.io/api/batch/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -44,6 +46,7 @@ var (
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
 		SetupIndexes:           SetupIndexes,
+		NewJob:                 NewJob,
 		NewReconciler:          NewReconciler,
 		SetupWebhook:           SetupJobSetWebhook,
 		JobType:                &jobsetapi.JobSet{},
@@ -64,7 +67,11 @@ func init() {
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloadpriorityclasses,verbs=get;list;watch
 
-var NewReconciler = jobframework.NewGenericReconcilerFactory(func() jobframework.GenericJob { return &JobSet{} })
+func NewJob() jobframework.GenericJob {
+	return &JobSet{}
+}
+
+var NewReconciler = jobframework.NewGenericReconcilerFactory(NewJob)
 
 func isJobSet(owner *metav1.OwnerReference) bool {
 	return owner.Kind == "JobSet" && strings.HasPrefix(owner.APIVersion, "jobset.x-k8s.io/v1")
@@ -104,6 +111,10 @@ func (j *JobSet) GVK() schema.GroupVersionKind {
 	return gvk
 }
 
+func (j *JobSet) PodLabelSelector() string {
+	return fmt.Sprintf("%s=%s", jobsetapi.JobSetNameKey, j.Name)
+}
+
 func (j *JobSet) PodSets() []kueue.PodSet {
 	podSets := make([]kueue.PodSet, len(j.Spec.ReplicatedJobs))
 	for index, replicatedJob := range j.Spec.ReplicatedJobs {
@@ -111,6 +122,9 @@ func (j *JobSet) PodSets() []kueue.PodSet {
 			Name:     replicatedJob.Name,
 			Template: *replicatedJob.Template.Spec.Template.DeepCopy(),
 			Count:    podsCount(&replicatedJob),
+			TopologyRequest: jobframework.PodSetTopologyRequest(&replicatedJob.Template.Spec.Template.ObjectMeta,
+				ptr.To(batchv1.JobCompletionIndexAnnotation), ptr.To(jobsetapi.JobIndexKey),
+				ptr.To(replicatedJob.Replicas)),
 		}
 	}
 	return podSets

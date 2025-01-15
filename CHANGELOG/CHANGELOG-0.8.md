@@ -1,3 +1,49 @@
+## v0.8.4
+
+Changes since `v0.8.3`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Change, and in some scenarios fix, the status message displayed to user when a workload doesn't fit in available capacity (#3551, @gabesaba)
+- Determine borrowing more accurately, allowing preempting workloads which fit in nominal quota to schedule faster (#3551, @gabesaba)
+
+## v0.8.3
+
+Changes since `v0.8.2`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Workload is requeued with all AdmissionChecks set to Pending if there was an AdmissionCheck in Retry state. (#3323, @PBundyra)
+- Account for NumOfHosts when calculating PodSet assignments for RayJob and RayCluster (#3384, @andrewsykim)
+
+## v0.8.2
+
+Changes since `v0.8.1`:
+
+### Feature
+
+- Helm: Support the topologySpreadConstraints and PodDisruptionBudget (#3282, @woehrl01)
+
+### Bug or Regression
+
+- Fix a bug that could delay the election of a new leader in the Kueue with multiple replicas env. (#3096, @tenzen-y)
+- Fix resource consumption computation for partially admitted workloads. (#3206, @trasc)
+- Fix restoring parallelism on eviction for partially admitted batch/Jobs. (#3208, @trasc)
+- Fix some scenarios for partial admission which are affected by wrong calculation of resources
+  used by the incoming workload which is partially admitted and preempting. (#3205, @trasc)
+- Fix webook validation for batch/Job to allow partial admission of a Job to use all available resources.
+  It also fixes a scenario of partial re-admission when some of the Pods are already reclaimed. (#3207, @trasc)
+- Prevent job webhooks from dropping fields for newer API fields when Kueue libraries are behind the latest released CRDs. (#3358, @mbobrovskyi)
+- RayJob's implementation of Finished() now inspects at JobDeploymentStatus (#3128, @andrewsykim)
+
+### Other (Cleanup or Flake)
+
+- Add a jobframework.BaseWebhook that can be used for custom job integrations (#3355, @mbobrovskyi)
+
 ## v0.8.1
 
 Changes since `v0.8.0`:

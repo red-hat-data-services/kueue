@@ -57,8 +57,8 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		qManager,
 		cc,
 		WithQueueVisibilityUpdateInterval(queueVisibilityUpdateInterval(cfg)),
-		WithQueueVisibilityClusterQueuesMaxCount(queueVisibilityClusterQueuesMaxCount(cfg)),
 		WithReportResourceMetrics(cfg.Metrics.EnableClusterQueueResources),
+		WithQueueVisibilityClusterQueuesMaxCount(queueVisibilityClusterQueuesMaxCount(cfg)),
 		WithFairSharing(fairSharingEnabled),
 		WithWatchers(rfRec, acRec),
 	)
@@ -71,6 +71,11 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 		return "ClusterQueue", err
 	}
 
+	cohortRec := NewCohortReconciler(mgr.GetClient(), cc, qManager)
+	if err := cohortRec.SetupWithManager(mgr, cfg); err != nil {
+		return "Cohort", err
+	}
+
 	if err := NewWorkloadReconciler(mgr.GetClient(), qManager, cc,
 		mgr.GetEventRecorderFor(constants.WorkloadControllerName),
 		WithWorkloadUpdateWatchers(qRec, cqRec),
@@ -78,6 +83,7 @@ func SetupControllers(mgr ctrl.Manager, qManager *queue.Manager, cc *cache.Cache
 	).SetupWithManager(mgr, cfg); err != nil {
 		return "Workload", err
 	}
+	qManager.AddTopologyUpdateWatcher(cqRec)
 	return "", nil
 }
 

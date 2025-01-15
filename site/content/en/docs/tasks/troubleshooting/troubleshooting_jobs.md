@@ -1,7 +1,7 @@
 ---
 title: "Troubleshooting Jobs"
 date: 2024-03-21
-weight: 2
+weight: 1
 description: >
   Troubleshooting the status of a Job
 ---
@@ -69,6 +69,38 @@ running the following command:
 kubectl describe workload -n my-namespace job-my-job-19797
 ```
 
+
+## What ResourceFlavors does my Job use?
+
+Once you [identified the Workload for you Job](/docs/tasks/troubleshooting/troubleshooting_jobs/#identifying-the-workload-for-your-job) run the following command to get all the details of your Workload:
+
+```sh
+kubectl describe workload -n my-namespace job-my-job-19797
+```
+
+The output should be similar to the following:
+
+```yaml
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: Workload
+...
+status:
+  admission:
+    clusterQueue: cluster-queue
+    podSetAssignments:
+    - count: 3
+      flavors:
+        cpu: default-flavor
+        memory: default-flavor
+      name: main
+      resourceUsage:
+        cpu: "3"
+        memory: 600Mi
+  ...
+```
+
+Now you can clearly see what `ResourceFlavors` your Job uses.
+
 ## Is my Job suspended?
 
 To know whether your Job is suspended, look for the value of the `.spec.suspend` field, by
@@ -107,17 +139,7 @@ apiVersion: kueue.x-k8s.io/v1beta1
 kind: Workload
 ...
 status:
-  admission:
-    clusterQueue: cluster-queue
-    podSetAssignments:
-    - count: 3
-      flavors:
-        cpu: default-flavor
-        memory: default-flavor
-      name: main
-      resourceUsage:
-        cpu: "3"
-        memory: 600Mi
+  ...
   conditions:
   - lastTransitionTime: "2024-03-19T20:49:17Z"
     message: Quota reserved in ClusterQueue cluster-queue
@@ -145,7 +167,20 @@ status:
     reason: Pending
     status: "False"
     type: QuotaReserved
+  resourceRequests:
+    name: main
+    resources:
+      cpu:    3
+      Memory: 600Mi
 ```
+
+{{< feature-state state="beta" for_version="v0.10" >}}
+{{% alert title="Note" color="primary" %}}
+
+Populating the `status.resourceRequests` field of pending workloads is a Beta feature that is enabled by default.
+
+You can disable it by setting the `WorkloadResourceRequestsSummary` feature gate. Check the [Installation](/docs/installation/#change-the-feature-gates-configuration) guide for details on feature gate configuration.
+{{% /alert %}}
 
 ### Does my ClusterQueue have the resource requests that the job requires?
 

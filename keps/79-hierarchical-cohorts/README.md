@@ -9,6 +9,7 @@
   - [User Stories (Optional)](#user-stories-optional)
     - [Story 1](#story-1)
     - [Story 2](#story-2)
+  - [Notes](#notes)
   - [Risks and Mitigations](#risks-and-mitigations)
 - [Design Details](#design-details)
   - [Test Plan](#test-plan)
@@ -91,6 +92,22 @@ borrow unused capacity from any of the organizations.
 With this proposal, the cohorts for organizations will set borrowingLimit to 0. Top level Cohort will 
 contain all of these Cohorts, plus the "special" ClusterQueue, with borrowingLimit set to infinity. 
 
+### Notes
+
+As Cohorts do not have finalizers, Cohort's deletion will be processed
+immediately. If this Cohort is referenced by any Cohorts or ClusterQueues, the
+deleted Cohort will still exist in Kueue, but will no longer provide any
+resources of its own nor have a parent Cohort.
+
+This immediate deletion could result the tree suddenly losing capacity, which,
+depending on configuration, may result in preemptions. Fixing this is
+not as simple as just adding finalizers - non-deletions (nodes changing parents
+or resources) may trigger this capacity loss as well.  We may consider
+preventing a node from making a change which would result invalid balances -
+perhaps by requiring cordoning or draining some part of the tree before the
+change is executed. This requires further consideration and will not be included
+in the initial implementation.
+
 ### Risks and Mitigations
 
 * Users may create a cycle in the Cohort hierarchy - Kueue will stop all new admissions within
@@ -111,14 +128,13 @@ type Cohort struct {
     metav1.ObjectMeta `json:"metadata,omitempty"`
 
     Spec   CohortSpec   `json:"spec,omitempty"`
-    Status CohortStatus `json:"status,omitempty"`
 }
 
 type CohortSpec struct {
     // Cohort parent name. The parent Cohort object doesn't have to exist.
     // In such case, it is assumed that parent simply doesn't have any
     // quota and limits and doesn't have any other custom settings.
-    Parent *string `json:"parent,omitempty"`
+    Parent string `json:"parent,omitempty"`
 
     // resourceGroups describes groups of resources that the Cohort can
     // share with ClusterQueues within the same group of Cohorts/ClusterQueues.
@@ -139,28 +155,6 @@ type CohortSpec struct {
     // +listType=atomic
     // +kubebuilder:validation:MaxItems=16
     ResourceGroups []ResourceGroup `json:"resourceGroups,omitempty"`
-}
-
-const (
-    // Condition indicating that a Cohort is correctly configured (for example, there is no cycle).
-    CohortActive = "CohortActive"
-)
-
-// Status of the Cohort. May be empty if Cohort support is not enabled in alpha.
-// Status and stats may not cover the entire subtree, as the number of needed updates
-// per workload admission may be to high.
-type CohortStatus struct {
-    // conditions hold the latest available observations of the Conditions
-    // current state.
-    // +optional
-    // +listType=map
-    // +listMapKey=type
-    // +patchStrategy=merge
-    // +patchMergeKey=type
-    Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
-
-    // Additional stats may be added in the future, like the number 
-    // of admitted workloads, their usage etc, based on the user feedback.
 }
 ```
 
@@ -246,4 +240,4 @@ and quotas it may be hard for users to keep them under control.
 
 ## Alternatives
 
-* https://github.com/kubernetes-sigs/kueue/pull/1093 - Hierarchical ClusterQueues. 
+* https://github.com/kubernetes-sigs/kueue/pull/1093 - Hierarchical ClusterQueues.

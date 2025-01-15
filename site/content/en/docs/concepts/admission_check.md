@@ -1,6 +1,6 @@
 ---
 title: "Admission Check"
-date: 2024-13-06
+date: 2024-06-13
 weight: 6
 description: >
   Mechanism allowing internal or external components to influence the workload's admission.
@@ -121,7 +121,7 @@ If any of the Workload's AdmissionCheck is in the `Retry` state:
 
 If any of the Workload's AdmissionCheck is in the `Rejected` state:
   - Workload is deactivated - [`workload.Spec.Active`](docs/concepts/workload/#active) is set to `False`
-  - If `Admitted` the Workload is evicted - Workload has an `Evicted` condition in `workload.Status.Condition` with `InactiveWorkload` as a `Reason`
+  - If `Admitted` the Workload is evicted - Workload has an `Evicted` condition in `workload.Status.Condition` with `Deactivated` as a `Reason`
   - If the Workload has `QuotaReservation` it will be released.
   - Event `AdmissionCheckRejected` is emitted
 

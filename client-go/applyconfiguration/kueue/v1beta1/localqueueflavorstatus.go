@@ -22,7 +22,7 @@ import (
 	v1beta1 "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 )
 
-// LocalQueueFlavorStatusApplyConfiguration represents an declarative configuration of the LocalQueueFlavorStatus type for use
+// LocalQueueFlavorStatusApplyConfiguration represents a declarative configuration of the LocalQueueFlavorStatus type for use
 // with apply.
 type LocalQueueFlavorStatusApplyConfiguration struct {
 	Name       *v1beta1.ResourceFlavorReference `json:"name,omitempty"`
@@ -31,7 +31,7 @@ type LocalQueueFlavorStatusApplyConfiguration struct {
 	NodeTaints []v1.Taint                       `json:"nodeTaints,omitempty"`
 }
 
-// LocalQueueFlavorStatusApplyConfiguration constructs an declarative configuration of the LocalQueueFlavorStatus type for use with
+// LocalQueueFlavorStatusApplyConfiguration constructs a declarative configuration of the LocalQueueFlavorStatus type for use with
 // apply.
 func LocalQueueFlavorStatus() *LocalQueueFlavorStatusApplyConfiguration {
 	return &LocalQueueFlavorStatusApplyConfiguration{}

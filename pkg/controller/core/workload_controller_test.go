@@ -312,12 +312,15 @@ var (
 		),
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
 		cmpopts.IgnoreFields(kueue.AdmissionCheckState{}, "LastTransitionTime"),
+		cmpopts.IgnoreFields(kueue.RequeueState{}, "RequeueAt"),
 		cmpopts.SortSlices(func(a, b metav1.Condition) bool { return a.Type < b.Type }),
 	}
 )
 
 func TestReconcile(t *testing.T) {
-	testStartTime := time.Now()
+	// the clock is primarily used with second rounded times
+	// use the current time trimmed.
+	testStartTime := time.Now().Truncate(time.Second)
 	fakeClock := testingclock.NewFakeClock(testStartTime)
 
 	cases := map[string]struct {
@@ -327,6 +330,7 @@ func TestReconcile(t *testing.T) {
 		wantWorkload   *kueue.Workload
 		wantError      error
 		wantEvents     []utiltesting.EventRecord
+		wantResult     reconcile.Result
 		reconcilerOpts []Option
 	}{
 		"assign Admission Checks from ClusterQueue.spec.AdmissionCheckStrategy": {
@@ -466,11 +470,24 @@ func TestReconcile(t *testing.T) {
 			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
 				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
-				Active(false).
 				AdmissionCheck(kueue.AdmissionCheckState{
 					Name:  "check",
 					State: kueue.CheckStateRejected,
 				}).
+				Conditions(
+					metav1.Condition{
+						Type:    kueue.WorkloadQuotaReserved,
+						Status:  metav1.ConditionTrue,
+						Reason:  "AdmittedByTest",
+						Message: "Admitted by ClusterQueue q1",
+					},
+					metav1.Condition{
+						Type:    kueue.WorkloadDeactivationTarget,
+						Status:  metav1.ConditionTrue,
+						Reason:  "AdmissionCheck",
+						Message: "Admission check(s): [check], were rejected",
+					},
+				).
 				Obj(),
 			wantEvents: []utiltesting.EventRecord{
 				{
@@ -494,24 +511,31 @@ func TestReconcile(t *testing.T) {
 			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
 				Admitted(true).
-				Active(false).
 				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
 				AdmissionCheck(kueue.AdmissionCheckState{
 					Name:  "check",
 					State: kueue.CheckStateRejected,
 				}).
-				Conditions(metav1.Condition{
-					Type:    kueue.WorkloadQuotaReserved,
-					Status:  metav1.ConditionTrue,
-					Reason:  "AdmittedByTest",
-					Message: "Admitted by ClusterQueue q1",
-				},
+				Conditions(
+					metav1.Condition{
+						Type:    kueue.WorkloadQuotaReserved,
+						Status:  metav1.ConditionTrue,
+						Reason:  "AdmittedByTest",
+						Message: "Admitted by ClusterQueue q1",
+					},
 					metav1.Condition{
 						Type:    kueue.WorkloadAdmitted,
 						Status:  metav1.ConditionTrue,
 						Reason:  "ByTest",
 						Message: "Admitted by ClusterQueue q1",
-					}).
+					},
+					metav1.Condition{
+						Type:    kueue.WorkloadDeactivationTarget,
+						Status:  metav1.ConditionTrue,
+						Reason:  "AdmissionCheck",
+						Message: "Admission check(s): [check], were rejected",
+					},
+				).
 				Obj(),
 			wantEvents: []utiltesting.EventRecord{
 				{
@@ -522,23 +546,94 @@ func TestReconcile(t *testing.T) {
 				},
 			},
 		},
-		"admitted workload with retry checks": {
+		"workload with deactivation target condition should be deactivated and admission checks reset": {
 			workload: utiltesting.MakeWorkload("wl", "ns").
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
 				Admitted(true).
+				Active(false).
 				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
-				AdmissionCheck(kueue.AdmissionCheckState{
-					Name:  "check",
-					State: kueue.CheckStateRetry,
+				AdmissionChecks(
+					kueue.AdmissionCheckState{
+						Name:  "check-1",
+						State: kueue.CheckStateRejected,
+					},
+					kueue.AdmissionCheckState{
+						Name:  "check-2",
+						State: kueue.CheckStateRetry,
+					},
+				).
+				Conditions(metav1.Condition{
+					Type:    kueue.WorkloadDeactivationTarget,
+					Status:  metav1.ConditionTrue,
+					Reason:  kueue.WorkloadEvictedByAdmissionCheck,
+					Message: "Admission check(s): [check-1], were rejected",
 				}).
 				Obj(),
 			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
 				Admitted(true).
+				Active(false).
 				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
-				AdmissionCheck(kueue.AdmissionCheckState{
-					Name:  "check",
+				AdmissionChecks(
+					kueue.AdmissionCheckState{
+						Name:    "check-1",
+						State:   kueue.CheckStatePending,
+						Message: "Reset to Pending after eviction. Previously: Rejected",
+					},
+					kueue.AdmissionCheckState{
+						Name:    "check-2",
+						State:   kueue.CheckStatePending,
+						Message: "Reset to Pending after eviction. Previously: Retry",
+					},
+				).
+				Conditions(
+					metav1.Condition{
+						Type:    kueue.WorkloadEvicted,
+						Status:  metav1.ConditionTrue,
+						Reason:  "DeactivatedDueToAdmissionCheck",
+						Message: "The workload is deactivated due to Admission check(s): [check-1], were rejected",
+					},
+					// In a real cluster this condition would be removed but it cant be in the fake cluster
+					metav1.Condition{
+						Type:    kueue.WorkloadDeactivationTarget,
+						Status:  metav1.ConditionTrue,
+						Reason:  kueue.WorkloadEvictedByAdmissionCheck,
+						Message: "Admission check(s): [check-1], were rejected",
+					},
+				).
+				Obj(),
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "ns", Name: "wl"},
+					EventType: "Normal",
+					Reason:    "EvictedDueToDeactivatedDueToAdmissionCheck",
+					Message:   "The workload is deactivated due to Admission check(s): [check-1], were rejected",
+				},
+			},
+		},
+		"workload with retry checks should be evicted and checks should be pending": {
+			workload: utiltesting.MakeWorkload("wl", "ns").
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
+				AdmissionChecks(kueue.AdmissionCheckState{
+					Name:  "check-1",
 					State: kueue.CheckStateRetry,
+				}, kueue.AdmissionCheckState{
+					Name:  "check-2",
+					State: kueue.CheckStateReady,
+				}).
+				Obj(),
+			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
+				AdmissionChecks(kueue.AdmissionCheckState{
+					Name:    "check-1",
+					State:   kueue.CheckStatePending,
+					Message: "Reset to Pending after eviction. Previously: Retry",
+				}, kueue.AdmissionCheckState{
+					Name:    "check-2",
+					State:   kueue.CheckStatePending,
+					Message: "Reset to Pending after eviction. Previously: Ready",
 				}).
 				Condition(metav1.Condition{
 					Type:    "Evicted",
@@ -587,8 +682,9 @@ func TestReconcile(t *testing.T) {
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
 				Admitted(true).
 				AdmissionCheck(kueue.AdmissionCheckState{
-					Name:  "check",
-					State: kueue.CheckStateReady,
+					Name:    "check",
+					State:   kueue.CheckStatePending,
+					Message: "Reset to Pending after eviction. Previously: Ready",
 				}).
 				Generation(1).
 				Condition(metav1.Condition{
@@ -681,8 +777,9 @@ func TestReconcile(t *testing.T) {
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
 				Admitted(true).
 				AdmissionCheck(kueue.AdmissionCheckState{
-					Name:  "check",
-					State: kueue.CheckStateReady,
+					Name:    "check",
+					State:   kueue.CheckStatePending,
+					Message: "Reset to Pending after eviction. Previously: Ready",
 				}).
 				Generation(1).
 				Condition(metav1.Condition{
@@ -710,7 +807,7 @@ func TestReconcile(t *testing.T) {
 				Condition(metav1.Condition{
 					Type:    kueue.WorkloadRequeued,
 					Status:  metav1.ConditionFalse,
-					Reason:  kueue.WorkloadEvictedByDeactivation,
+					Reason:  kueue.WorkloadDeactivated,
 					Message: "The workload is deactivated",
 				}).
 				Obj(),
@@ -724,7 +821,7 @@ func TestReconcile(t *testing.T) {
 				}).
 				Obj(),
 		},
-		"should keep the WorkloadRequeued condition until the backoff expires": {
+		"should keep the WorkloadRequeued condition until the WaitForPodsReady backoff expires": {
 			workload: utiltesting.MakeWorkload("wl", "ns").
 				Active(true).
 				Condition(metav1.Condition{
@@ -745,8 +842,9 @@ func TestReconcile(t *testing.T) {
 				}).
 				RequeueState(ptr.To[int32](1), ptr.To(metav1.NewTime(testStartTime.Add(60*time.Second).Truncate(time.Second)))).
 				Obj(),
+			wantResult: reconcile.Result{RequeueAfter: time.Minute},
 		},
-		"should set the WorkloadRequeued condition when backoff expires": {
+		"should set the WorkloadRequeued condition when the WaitForPodsReady backoff expires": {
 			workload: utiltesting.MakeWorkload("wl", "ns").
 				Active(true).
 				Condition(metav1.Condition{
@@ -754,6 +852,51 @@ func TestReconcile(t *testing.T) {
 					Status:  metav1.ConditionFalse,
 					Reason:  kueue.WorkloadEvictedByPodsReadyTimeout,
 					Message: "Exceeded the PodsReady timeout ns",
+				}).
+				RequeueState(ptr.To[int32](1), ptr.To(metav1.NewTime(testStartTime.Truncate(time.Second)))).
+				Obj(),
+			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
+				Active(true).
+				Condition(metav1.Condition{
+					Type:    kueue.WorkloadRequeued,
+					Status:  metav1.ConditionTrue,
+					Reason:  kueue.WorkloadBackoffFinished,
+					Message: "The workload backoff was finished",
+				}).
+				RequeueState(ptr.To[int32](1), ptr.To(metav1.NewTime(testStartTime.Truncate(time.Second)))).
+				Obj(),
+		},
+		"should keep the WorkloadRequeued condition until the AdmissionCheck backoff expires": {
+			workload: utiltesting.MakeWorkload("wl", "ns").
+				Active(true).
+				Condition(metav1.Condition{
+					Type:    kueue.WorkloadRequeued,
+					Status:  metav1.ConditionFalse,
+					Reason:  kueue.WorkloadEvictedByAdmissionCheck,
+					Message: "Exceeded the AdmissionCheck timeout ns",
+				}).
+				RequeueState(ptr.To[int32](1), ptr.To(metav1.NewTime(testStartTime.Add(60*time.Second).Truncate(time.Second)))).
+				Obj(),
+			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
+				Active(true).
+				Condition(metav1.Condition{
+					Type:    kueue.WorkloadRequeued,
+					Status:  metav1.ConditionFalse,
+					Reason:  kueue.WorkloadEvictedByAdmissionCheck,
+					Message: "Exceeded the AdmissionCheck timeout ns",
+				}).
+				RequeueState(ptr.To[int32](1), ptr.To(metav1.NewTime(testStartTime.Add(60*time.Second).Truncate(time.Second)))).
+				Obj(),
+			wantResult: reconcile.Result{RequeueAfter: time.Minute},
+		},
+		"should set the WorkloadRequeued condition when the AdmissionCheck backoff expires": {
+			workload: utiltesting.MakeWorkload("wl", "ns").
+				Active(true).
+				Condition(metav1.Condition{
+					Type:    kueue.WorkloadRequeued,
+					Status:  metav1.ConditionFalse,
+					Reason:  kueue.WorkloadEvictedByAdmissionCheck,
+					Message: "Exceeded the AdmissionCheck timeout ns",
 				}).
 				RequeueState(ptr.To[int32](1), ptr.To(metav1.NewTime(testStartTime.Truncate(time.Second)))).
 				Obj(),
@@ -850,19 +993,19 @@ func TestReconcile(t *testing.T) {
 				}).
 				Obj(),
 		},
-		"should set the Evicted condition with InactiveWorkload reason when the .spec.active=False": {
+		"should set the Evicted condition with Deactivated reason when the .spec.active=False": {
 			workload: utiltesting.MakeWorkload("wl", "ns").Active(false).Obj(),
 			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
 				Active(false).
 				Condition(metav1.Condition{
 					Type:    kueue.WorkloadEvicted,
 					Status:  metav1.ConditionTrue,
-					Reason:  kueue.WorkloadEvictedByDeactivation,
+					Reason:  kueue.WorkloadDeactivated,
 					Message: "The workload is deactivated",
 				}).
 				Obj(),
 		},
-		"should set the Evicted condition with InactiveWorkload reason when the .spec.active=False and Admitted": {
+		"should set the Evicted condition with Deactivated reason when the .spec.active=False and Admitted": {
 			workload: utiltesting.MakeWorkload("wl", "ns").
 				Active(false).
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
@@ -875,7 +1018,7 @@ func TestReconcile(t *testing.T) {
 				Condition(metav1.Condition{
 					Type:    kueue.WorkloadEvicted,
 					Status:  metav1.ConditionTrue,
-					Reason:  kueue.WorkloadEvictedByDeactivation,
+					Reason:  kueue.WorkloadDeactivated,
 					Message: "The workload is deactivated",
 				}).
 				Obj(),
@@ -883,12 +1026,12 @@ func TestReconcile(t *testing.T) {
 				{
 					Key:       types.NamespacedName{Name: "wl", Namespace: "ns"},
 					EventType: corev1.EventTypeNormal,
-					Reason:    "EvictedDueToInactiveWorkload",
+					Reason:    "EvictedDueToDeactivated",
 					Message:   "The workload is deactivated",
 				},
 			},
 		},
-		"should set the Evicted condition with InactiveWorkload reason when the .spec.active is False, Admitted, and the Workload has Evicted=False condition": {
+		"should set the Evicted condition with Deactivated reason when the .spec.active is False, Admitted, and the Workload has Evicted=False condition": {
 			workload: utiltesting.MakeWorkload("wl", "ns").
 				Active(false).
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
@@ -907,7 +1050,7 @@ func TestReconcile(t *testing.T) {
 				Condition(metav1.Condition{
 					Type:    kueue.WorkloadEvicted,
 					Status:  metav1.ConditionTrue,
-					Reason:  kueue.WorkloadEvictedByDeactivation,
+					Reason:  kueue.WorkloadDeactivated,
 					Message: "The workload is deactivated",
 				}).
 				Obj(),
@@ -915,12 +1058,12 @@ func TestReconcile(t *testing.T) {
 				{
 					Key:       types.NamespacedName{Name: "wl", Namespace: "ns"},
 					EventType: corev1.EventTypeNormal,
-					Reason:    "EvictedDueToInactiveWorkload",
+					Reason:    "EvictedDueToDeactivated",
 					Message:   "The workload is deactivated",
 				},
 			},
 		},
-		"should set the Evicted condition with InactiveWorkload reason, exceeded the maximum number of requeue retries" +
+		"should set the Evicted condition with Deactivated reason, exceeded the maximum number of requeue retries" +
 			"when the .spec.active is False, Admitted, the Workload has Evicted=False and DeactivationTarget=True condition": {
 			reconcilerOpts: []Option{
 				WithWaitForPodsReady(&waitForPodsReadyConfig{
@@ -960,7 +1103,7 @@ func TestReconcile(t *testing.T) {
 				Condition(metav1.Condition{
 					Type:    kueue.WorkloadEvicted,
 					Status:  metav1.ConditionTrue,
-					Reason:  "InactiveWorkloadRequeuingLimitExceeded",
+					Reason:  "DeactivatedDueToRequeuingLimitExceeded",
 					Message: "The workload is deactivated due to exceeding the maximum number of re-queuing retries",
 				}).
 				// DeactivationTarget condition should be deleted in the real cluster, but the fake client doesn't allow us to do it.
@@ -975,12 +1118,12 @@ func TestReconcile(t *testing.T) {
 				{
 					Key:       types.NamespacedName{Name: "wl", Namespace: "ns"},
 					EventType: corev1.EventTypeNormal,
-					Reason:    "EvictedDueToInactiveWorkloadRequeuingLimitExceeded",
+					Reason:    "EvictedDueToDeactivatedDueToRequeuingLimitExceeded",
 					Message:   "The workload is deactivated due to exceeding the maximum number of re-queuing retries",
 				},
 			},
 		},
-		"[backoffLimitCount: 100] should set the Evicted condition with InactiveWorkload reason, exceeded the maximum number of requeue retries" +
+		"[backoffLimitCount: 100] should set the Evicted condition with Deactivated reason, exceeded the maximum number of requeue retries" +
 			"when the .spec.active is False, Admitted, the Workload has Evicted=False and DeactivationTarget=True condition, and the requeueState.count equals to backoffLimitCount": {
 			reconcilerOpts: []Option{
 				WithWaitForPodsReady(&waitForPodsReadyConfig{
@@ -1021,7 +1164,7 @@ func TestReconcile(t *testing.T) {
 				Condition(metav1.Condition{
 					Type:    kueue.WorkloadEvicted,
 					Status:  metav1.ConditionTrue,
-					Reason:  "InactiveWorkloadRequeuingLimitExceeded",
+					Reason:  "DeactivatedDueToRequeuingLimitExceeded",
 					Message: "The workload is deactivated due to exceeding the maximum number of re-queuing retries",
 				}).
 				// DeactivationTarget condition should be deleted in the real cluster, but the fake client doesn't allow us to do it.
@@ -1038,7 +1181,7 @@ func TestReconcile(t *testing.T) {
 				{
 					Key:       types.NamespacedName{Name: "wl", Namespace: "ns"},
 					EventType: corev1.EventTypeNormal,
-					Reason:    "EvictedDueToInactiveWorkloadRequeuingLimitExceeded",
+					Reason:    "EvictedDueToDeactivatedDueToRequeuingLimitExceeded",
 					Message:   "The workload is deactivated due to exceeding the maximum number of re-queuing retries",
 				},
 			},
@@ -1314,6 +1457,51 @@ func TestReconcile(t *testing.T) {
 				}).
 				Obj(),
 		},
+
+		"admitted workload with max execution time": {
+			workload: utiltesting.MakeWorkload("wl", "ns").
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				MaximumExecutionTimeSeconds(120).
+				AdmittedAt(true, testStartTime.Add(-time.Minute)).
+				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
+				Obj(),
+			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				MaximumExecutionTimeSeconds(120).
+				AdmittedAt(true, testStartTime.Add(-time.Minute)).
+				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
+				Obj(),
+			wantResult: reconcile.Result{RequeueAfter: time.Minute},
+		},
+
+		"admitted workload with max execution time - expired": {
+			workload: utiltesting.MakeWorkload("wl", "ns").
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				MaximumExecutionTimeSeconds(60).
+				AdmittedAt(true, testStartTime.Add(-2*time.Minute)).
+				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
+				Obj(),
+			wantWorkload: utiltesting.MakeWorkload("wl", "ns").
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				MaximumExecutionTimeSeconds(60).
+				AdmittedAt(true, testStartTime.Add(-2*time.Minute)).
+				ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "ownername", "owneruid").
+				Condition(metav1.Condition{
+					Type:    kueue.WorkloadDeactivationTarget,
+					Status:  metav1.ConditionTrue,
+					Reason:  kueue.WorkloadMaximumExecutionTimeExceeded,
+					Message: "exceeding the maximum execution time",
+				}).
+				Obj(),
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       types.NamespacedName{Namespace: "ns", Name: "wl"},
+					EventType: "Warning",
+					Reason:    "MaximumExecutionTimeExceeded",
+					Message:   "The maximum execution time (60s) exceeded",
+				},
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1350,10 +1538,14 @@ func TestReconcile(t *testing.T) {
 				}
 			}
 
-			_, gotError := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(tc.workload)})
+			gotResult, gotError := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(tc.workload)})
 
 			if diff := cmp.Diff(tc.wantError, gotError); diff != "" {
 				t.Errorf("unexpected reconcile error (-want/+got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tc.wantResult, gotResult); diff != "" {
+				t.Errorf("unexpected reconcile result (-want/+got):\n%s", diff)
 			}
 
 			gotWorkload := &kueue.Workload{}
