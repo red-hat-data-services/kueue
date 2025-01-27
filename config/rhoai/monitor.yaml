@@ -9,5 +9,9 @@ spec:
     matchLabels:
       app.kubernetes.io/name: kueue
       app.kubernetes.io/component: controller
-  podMetricsEndpoints:
-    - port: metrics
+  endpoints:
+  - port: https-metrics
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token

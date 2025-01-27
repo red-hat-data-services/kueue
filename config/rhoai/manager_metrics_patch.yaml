@@ -12,3 +12,6 @@ spec:
         - containerPort: 8080
           protocol: TCP
           name: metrics
+        - containerPort: 8443
+          protocol: TCP
+          name: https-metrics
