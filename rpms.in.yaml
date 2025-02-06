@@ -5,3 +5,4 @@ packages:
   - gcc
   - make
   - openssl-devel
+  - git
