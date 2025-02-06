@@ -23,22 +23,20 @@ import (
 	"net/http"
 	"os"
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-	"k8s.io/client-go/util/flowcontrol"
-
 	zaplog "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -57,6 +55,8 @@ import (
 	"sigs.k8s.io/kueue/pkg/controller/core"
 	"sigs.k8s.io/kueue/pkg/controller/core/indexer"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
+	"sigs.k8s.io/kueue/pkg/controller/tas"
+	tasindexer "sigs.k8s.io/kueue/pkg/controller/tas/indexer"
 	"sigs.k8s.io/kueue/pkg/debugger"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/metrics"
@@ -69,9 +69,11 @@ import (
 	"sigs.k8s.io/kueue/pkg/visibility"
 	"sigs.k8s.io/kueue/pkg/webhooks"
 
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	// to ensure that exec-entrypoint and run can make use of them.
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	// Ensure linking of the job controllers.
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs"
-	// +kubebuilder:scaffold:imports
 )
 
 var (
@@ -96,8 +98,6 @@ func init() {
 			return nil
 		}),
 	)
-
-	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
@@ -115,22 +115,34 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-
-	if err := utilfeature.DefaultMutableFeatureGate.Set(featureGates); err != nil {
-		setupLog.Error(err, "Unable to set flag gates for known features")
-		os.Exit(1)
-	}
-
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-	setupLog.Info("Initializing", "gitVersion", version.GitVersion, "gitCommit", version.GitCommit)
-
-	features.LogFeatureGates(setupLog)
 
 	options, cfg, err := apply(configFile)
 	if err != nil {
 		setupLog.Error(err, "Unable to load the configuration")
 		os.Exit(1)
 	}
+
+	if err := config.ValidateFeatureGates(featureGates, cfg.FeatureGates); err != nil {
+		setupLog.Error(err, "conflicting feature gates detected")
+		os.Exit(1)
+	}
+
+	if featureGates != "" {
+		if err := utilfeature.DefaultMutableFeatureGate.Set(featureGates); err != nil {
+			setupLog.Error(err, "Unable to set flag gates for known features")
+			os.Exit(1)
+		}
+	} else {
+		if err := utilfeature.DefaultMutableFeatureGate.SetFromMap(cfg.FeatureGates); err != nil {
+			setupLog.Error(err, "Unable to set flag gates for known features")
+			os.Exit(1)
+		}
+	}
+
+	setupLog.Info("Initializing", "gitVersion", version.GitVersion, "gitCommit", version.GitCommit)
+
+	features.LogFeatureGates(setupLog)
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -175,6 +187,10 @@ func main() {
 	if cfg.Resources != nil && len(cfg.Resources.ExcludeResourcePrefixes) > 0 {
 		cacheOptions = append(cacheOptions, cache.WithExcludedResourcePrefixes(cfg.Resources.ExcludeResourcePrefixes))
 		queueOptions = append(queueOptions, queue.WithExcludedResourcePrefixes(cfg.Resources.ExcludeResourcePrefixes))
+	}
+	if features.Enabled(features.ConfigurableResourceTransformations) && cfg.Resources != nil && len(cfg.Resources.Transformations) > 0 {
+		cacheOptions = append(cacheOptions, cache.WithResourceTransformations(cfg.Resources.Transformations))
+		queueOptions = append(queueOptions, queue.WithResourceTransformations(cfg.Resources.Transformations))
 	}
 	if cfg.FairSharing != nil {
 		cacheOptions = append(cacheOptions, cache.WithFairSharing(cfg.FairSharing.Enable))
@@ -229,6 +245,13 @@ func setupIndexes(ctx context.Context, mgr ctrl.Manager, cfg *configapi.Configur
 		}
 	}
 
+	if features.Enabled(features.TopologyAwareScheduling) {
+		if err := tasindexer.SetupIndexes(ctx, mgr.GetFieldIndexer()); err != nil {
+			setupLog.Error(err, "Could not setup TAS indexer")
+			os.Exit(1)
+		}
+	}
+
 	if features.Enabled(features.MultiKueue) {
 		if err := multikueue.SetupIndexer(ctx, mgr.GetFieldIndexer(), *cfg.Namespace); err != nil {
 			setupLog.Error(err, "Could not setup multikueue indexer")
@@ -268,12 +291,25 @@ func setupControllers(ctx context.Context, mgr ctrl.Manager, cCache *cache.Cache
 	}
 
 	if features.Enabled(features.MultiKueue) {
+		adapters, err := jobframework.GetMultiKueueAdapters(sets.New(cfg.Integrations.Frameworks...))
+		if err != nil {
+			setupLog.Error(err, "Could not get the enabled multikueue adapters")
+			os.Exit(1)
+		}
 		if err := multikueue.SetupControllers(mgr, *cfg.Namespace,
 			multikueue.WithGCInterval(cfg.MultiKueue.GCInterval.Duration),
 			multikueue.WithOrigin(ptr.Deref(cfg.MultiKueue.Origin, configapi.DefaultMultiKueueOrigin)),
 			multikueue.WithWorkerLostTimeout(cfg.MultiKueue.WorkerLostTimeout.Duration),
+			multikueue.WithAdapters(adapters),
 		); err != nil {
 			setupLog.Error(err, "Could not setup MultiKueue controller")
+			os.Exit(1)
+		}
+	}
+
+	if features.Enabled(features.TopologyAwareScheduling) {
+		if failedCtrl, err := tas.SetupControllers(mgr, queues, cCache, cfg); err != nil {
+			setupLog.Error(err, "Could not setup TAS controller", "controller", failedCtrl)
 			os.Exit(1)
 		}
 	}
@@ -295,11 +331,19 @@ func setupControllers(ctx context.Context, mgr ctrl.Manager, cCache *cache.Cache
 		jobframework.WithCache(cCache),
 		jobframework.WithQueues(queues),
 	}
+	if features.Enabled(features.ManagedJobsNamespaceSelector) {
+		nsSelector, err := metav1.LabelSelectorAsSelector(cfg.ManagedJobsNamespaceSelector)
+		if err != nil {
+			setupLog.Error(err, "Failed to parse managedJobsNamespaceSelector")
+			os.Exit(1)
+		}
+		opts = append(opts, jobframework.WithManagedJobsNamespaceSelector(nsSelector))
+	}
+
 	if err := jobframework.SetupControllers(ctx, mgr, setupLog, opts...); err != nil {
 		setupLog.Error(err, "Unable to create controller or webhook", "kubernetesVersion", serverVersionFetcher.GetServerVersion())
 		os.Exit(1)
 	}
-	// +kubebuilder:scaffold:builder
 }
 
 // setupProbeEndpoints registers the health endpoints

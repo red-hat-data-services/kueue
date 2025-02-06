@@ -17,8 +17,9 @@ limitations under the License.
 package provisioning
 
 import (
+	"context"
+	"errors"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -29,21 +30,27 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	autoscaling "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1beta1"
+	"k8s.io/component-base/featuregate"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
+	"sigs.k8s.io/kueue/pkg/constants"
+	"sigs.k8s.io/kueue/pkg/features"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
+
+var errInvalidProvisioningRequest = errors.New("invalid ProvisioningRequest error")
 
 var (
 	wlCmpOptions = []cmp.Option{
 		cmpopts.EquateEmpty(),
 		cmpopts.IgnoreTypes(metav1.ObjectMeta{}, metav1.TypeMeta{}),
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
+		cmpopts.IgnoreFields(kueue.RequeueState{}, "RequeueAt"),
 		cmpopts.IgnoreFields(kueue.AdmissionCheckState{}, "LastTransitionTime"),
 	}
 
@@ -146,6 +153,9 @@ func TestReconcile(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: TestNamespace,
 			Name:      "wl-check1-1",
+			Labels: map[string]string{
+				constants.ManagedByKueueLabel: "true",
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					Name: "wl",
@@ -178,6 +188,9 @@ func TestReconcile(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: TestNamespace,
 			Name:      "ppt-wl-check1-1-ps1",
+			Labels: map[string]string{
+				constants.ManagedByKueueLabel: "true",
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					Name: "wl-check1-1",
@@ -213,6 +226,9 @@ func TestReconcile(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: TestNamespace,
 			Name:      "ppt-wl-check1-1-ps2",
+			Labels: map[string]string{
+				constants.ManagedByKueueLabel: "true",
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					Name: "wl-check1-1",
@@ -236,20 +252,16 @@ func TestReconcile(t *testing.T) {
 		},
 	}
 
-	baseConfig := &kueue.ProvisioningRequestConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "config1",
-		},
-		Spec: kueue.ProvisioningRequestConfigSpec{
-			ProvisioningClassName: "class1",
-			Parameters: map[string]kueue.Parameter{
-				"p1": "v1",
-			},
-		},
-	}
+	baseConfig := utiltesting.MakeProvisioningRequestConfig("config1").ProvisioningClass("class1").WithParameter("p1", "v1")
+
+	baseConfigWithRetryStrategy := baseConfig.Clone().RetryStrategy(&kueue.ProvisioningRequestRetryStrategy{
+		BackoffLimitCount:  ptr.To[int32](3),
+		BackoffBaseSeconds: ptr.To[int32](60),
+		BackoffMaxSeconds:  ptr.To[int32](1800),
+	})
 
 	baseCheck := utiltesting.MakeAdmissionCheck("check1").
-		ControllerName(ControllerName).
+		ControllerName(kueue.ProvisioningRequestControllerName).
 		Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
 		Obj()
 
@@ -258,9 +270,9 @@ func TestReconcile(t *testing.T) {
 		templates            []corev1.PodTemplate
 		checks               []kueue.AdmissionCheck
 		configs              []kueue.ProvisioningRequestConfig
+		enableGates          []featuregate.Feature
 		flavors              []kueue.ResourceFlavor
 		workload             *kueue.Workload
-		maxRetries           int32
 		wantReconcileError   error
 		wantWorkloads        map[string]*kueue.Workload
 		wantRequests         map[string]*autoscaling.ProvisioningRequest
@@ -302,7 +314,7 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			wantWorkloads: map[string]*kueue.Workload{
 				baseWorkload.Name: baseWorkload.DeepCopy(),
 			},
@@ -334,12 +346,15 @@ func TestReconcile(t *testing.T) {
 				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
 				Obj(),
 			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{{ObjectMeta: metav1.ObjectMeta{Name: "config1"}}},
+			configs: []kueue.ProvisioningRequestConfig{*utiltesting.MakeProvisioningRequestConfig("config1").Obj()},
 			wantRequests: map[string]*autoscaling.ProvisioningRequest{
 				ProvisioningRequestName("wl", baseCheck.Name, 1): {
 					ObjectMeta: metav1.ObjectMeta{
 						Namespace: TestNamespace,
 						Name:      ProvisioningRequestName("wl", baseCheck.Name, 1),
+						Labels: map[string]string{
+							constants.ManagedByKueueLabel: "true",
+						},
 						OwnerReferences: []metav1.OwnerReference{
 							{
 								Name: "wl",
@@ -367,7 +382,7 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -396,7 +411,7 @@ func TestReconcile(t *testing.T) {
 			workload:  baseWorkload.DeepCopy(),
 			checks:    []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:   []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:   []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:   []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests:  []autoscaling.ProvisioningRequest{*baseRequest.DeepCopy()},
 			templates: []corev1.PodTemplate{*baseTemplate1.DeepCopy()},
 			wantWorkloads: map[string]*kueue.Workload{
@@ -414,7 +429,7 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				{
 					ObjectMeta: metav1.ObjectMeta{
@@ -471,21 +486,21 @@ func TestReconcile(t *testing.T) {
 
 			checks:               []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:              []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:              []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:              []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests:             []autoscaling.ProvisioningRequest{*baseRequest.DeepCopy()},
 			templates:            []corev1.PodTemplate{*baseTemplate1.DeepCopy(), *baseTemplate2.DeepCopy()},
 			wantRequestsNotFound: []string{"wl-check1"},
 		},
-		"when request fails and is retried": {
+		"KeepQuotaForProvReqRetry; when request fails and is retried": {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.Clone().RetryLimit(2).BaseBackoff(0).Obj()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithCondition(baseRequest, autoscaling.Failed, metav1.ConditionTrue),
 			},
-			maxRetries: 2,
-			templates:  []corev1.PodTemplate{*baseTemplate1.DeepCopy(), *baseTemplate2.DeepCopy()},
+			enableGates: []featuregate.Feature{features.KeepQuotaForProvReqRetry},
+			templates:   []corev1.PodTemplate{*baseTemplate1.DeepCopy(), *baseTemplate2.DeepCopy()},
 			wantWorkloads: map[string]*kueue.Workload{
 				baseWorkload.Name: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
 					AdmissionChecks(kueue.AdmissionCheckState{
@@ -498,24 +513,42 @@ func TestReconcile(t *testing.T) {
 					}).
 					Obj(),
 			},
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       client.ObjectKeyFromObject(baseWorkload),
+					EventType: corev1.EventTypeNormal,
+					Reason:    "ProvisioningRequestCreated",
+					Message:   `Created ProvisioningRequest: "wl-check1-2"`,
+				},
+			}},
+		"when request fails and is retried": {
+			workload: baseWorkload.DeepCopy(),
+			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
+			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.Clone().RetryLimit(2).Obj()},
+			requests: []autoscaling.ProvisioningRequest{
+				*requestWithCondition(baseRequest, autoscaling.Failed, metav1.ConditionTrue),
+			},
+			templates: []corev1.PodTemplate{*baseTemplate1.DeepCopy(), *baseTemplate2.DeepCopy()},
+			wantWorkloads: map[string]*kueue.Workload{
+				baseWorkload.Name: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
+					AdmissionChecks(kueue.AdmissionCheckState{
+						Name:    "check1",
+						State:   kueue.CheckStateRetry,
+						Message: "Retrying after failure: ",
+					}, kueue.AdmissionCheckState{
+						Name:  "not-provisioning",
+						State: kueue.CheckStatePending,
+					}).
+					RequeueState(ptr.To[int32](1), nil).
+					Obj(),
+			},
 		},
 		"when request fails, and there is no retry": {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-						Parameters: map[string]kueue.Parameter{
-							"p1": "v1",
-						},
-					},
-				},
-			},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.Clone().RetryLimit(0).Obj()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithCondition(baseRequest, autoscaling.Failed, metav1.ConditionTrue),
 			},
@@ -536,7 +569,7 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithCondition(baseRequest, autoscaling.Provisioned, metav1.ConditionTrue),
 			},
@@ -550,13 +583,20 @@ func TestReconcile(t *testing.T) {
 							{
 								Name: "ps1",
 								Annotations: map[string]string{
-									"cluster-autoscaler.kubernetes.io/consume-provisioning-request": "wl-check1-1",
-									"cluster-autoscaler.kubernetes.io/provisioning-class-name":      "class1"},
+									DeprecatedConsumesAnnotationKey:  "wl-check1-1",
+									DeprecatedClassNameAnnotationKey: "class1",
+									ConsumesAnnotationKey:            "wl-check1-1",
+									ClassNameAnnotationKey:           "class1",
+								},
 							},
 							{
 								Name: "ps2",
-								Annotations: map[string]string{"cluster-autoscaler.kubernetes.io/consume-provisioning-request": "wl-check1-1",
-									"cluster-autoscaler.kubernetes.io/provisioning-class-name": "class1"},
+								Annotations: map[string]string{
+									DeprecatedConsumesAnnotationKey:  "wl-check1-1",
+									DeprecatedClassNameAnnotationKey: "class1",
+									ConsumesAnnotationKey:            "wl-check1-1",
+									ClassNameAnnotationKey:           "class1",
+								},
 							},
 						},
 					}, kueue.AdmissionCheckState{
@@ -570,19 +610,7 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{ObjectMeta: metav1.ObjectMeta{
-					Name: "config1",
-				},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-						Parameters: map[string]kueue.Parameter{
-							"p1": "v1",
-						},
-						ManagedResources: []corev1.ResourceName{"example.org/gpu"},
-					},
-				},
-			},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.Clone().WithManagedResource("example.org/gpu").Obj()},
 			wantWorkloads: map[string]*kueue.Workload{
 				baseWorkload.Name: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
 					AdmissionChecks(kueue.AdmissionCheckState{
@@ -600,24 +628,17 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkload.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{ObjectMeta: metav1.ObjectMeta{
-					Name: "config1",
-				},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-						Parameters: map[string]kueue.Parameter{
-							"p1": "v1",
-						},
-						ManagedResources: []corev1.ResourceName{corev1.ResourceMemory},
-					},
-				},
-			},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.Clone().WithManagedResource(corev1.ResourceMemory).Obj()},
 			wantWorkloads: map[string]*kueue.Workload{
 				baseWorkload.Name: baseWorkload.DeepCopy(),
 			},
 			wantRequests: map[string]*autoscaling.ProvisioningRequest{
 				"wl-check1-1": {
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							constants.ManagedByKueueLabel: "true",
+						},
+					},
 					Spec: autoscaling.ProvisioningRequestSpec{
 						PodSets: []autoscaling.PodSet{
 							{
@@ -650,24 +671,17 @@ func TestReconcile(t *testing.T) {
 			workload: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).Limit("example.com/gpu", "1").Obj(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{ObjectMeta: metav1.ObjectMeta{
-					Name: "config1",
-				},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-						Parameters: map[string]kueue.Parameter{
-							"p1": "v1",
-						},
-						ManagedResources: []corev1.ResourceName{"example.com/gpu"},
-					},
-				},
-			},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.Clone().WithManagedResource("example.com/gpu").Obj()},
 			wantWorkloads: map[string]*kueue.Workload{
 				baseWorkload.Name: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).Limit("example.com/gpu", "1").Obj(),
 			},
 			wantRequests: map[string]*autoscaling.ProvisioningRequest{
 				"wl-check1-1": {
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							constants.ManagedByKueueLabel: "true",
+						},
+					},
 					Spec: autoscaling.ProvisioningRequestSpec{
 						PodSets: []autoscaling.PodSet{
 							{
@@ -689,6 +703,9 @@ func TestReconcile(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Namespace: TestNamespace,
 						Name:      "ppt-wl-check1-1-ps1",
+						Labels: map[string]string{
+							constants.ManagedByKueueLabel: "true",
+						},
 						OwnerReferences: []metav1.OwnerReference{
 							{
 								Name: "wl-check1-1",
@@ -737,7 +754,7 @@ func TestReconcile(t *testing.T) {
 			workload: baseWorkloadWithCheck1Ready.DeepCopy(),
 			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs:  []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()},
+			configs:  []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			wantWorkloads: map[string]*kueue.Workload{
 				baseWorkload.Name: baseWorkloadWithCheck1Ready.DeepCopy(),
 			},
@@ -747,22 +764,10 @@ func TestReconcile(t *testing.T) {
 			},
 		},
 		"workloads status gets updated based on the provisioning request": {
-			workload: baseWorkload.DeepCopy(),
-			checks:   []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
-			flavors:  []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-						Parameters: map[string]kueue.Parameter{
-							"p1": "v1",
-						},
-					},
-				},
-			},
+			workload:  baseWorkload.DeepCopy(),
+			checks:    []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
+			flavors:   []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
+			configs:   []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			templates: []corev1.PodTemplate{*baseTemplate1.DeepCopy(), *baseTemplate2.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
@@ -801,16 +806,7 @@ func TestReconcile(t *testing.T) {
 				Obj(),
 			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-					},
-				},
-			},
+			configs: []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
 					[]metav1.Condition{
@@ -851,16 +847,7 @@ func TestReconcile(t *testing.T) {
 				Obj(),
 			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-					},
-				},
-			},
+			configs: []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
 					[]metav1.Condition{
@@ -906,16 +893,7 @@ func TestReconcile(t *testing.T) {
 				Obj(),
 			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-					},
-				},
-			},
+			configs: []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
 					[]metav1.Condition{
@@ -956,16 +934,7 @@ func TestReconcile(t *testing.T) {
 				Obj(),
 			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-					},
-				},
-			},
+			configs: []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.DeepCopy()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
 					[]metav1.Condition{
@@ -993,23 +962,14 @@ func TestReconcile(t *testing.T) {
 					Obj(),
 			},
 		},
-		"workloads retries the admission check when is not admitted and receives the provisioning request's BookingExpired condition": {
+		"KeepQuotaForProvReqRetry; workload retries the admission check when is not admitted and receives the provisioning request's BookingExpired condition": {
 			workload: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
 				Admitted(false).
 				Obj(),
-			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
-			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-					},
-				},
-			},
-			maxRetries: 1,
+			checks:      []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
+			flavors:     []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
+			configs:     []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.Clone().RetryLimit(1).BaseBackoff(0).Obj()},
+			enableGates: []featuregate.Feature{features.KeepQuotaForProvReqRetry},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
 					[]metav1.Condition{
@@ -1026,9 +986,8 @@ func TestReconcile(t *testing.T) {
 							Status: metav1.ConditionTrue,
 						},
 						{
-							Type:               autoscaling.BookingExpired,
-							Status:             metav1.ConditionTrue,
-							LastTransitionTime: metav1.NewTime(time.Now().Add(time.Hour * (-1))),
+							Type:   autoscaling.BookingExpired,
+							Status: metav1.ConditionTrue,
 						},
 					}),
 			},
@@ -1046,10 +1005,13 @@ func TestReconcile(t *testing.T) {
 					Obj(),
 			},
 			wantRequests: map[string]*autoscaling.ProvisioningRequest{
-				ProvisioningRequestName("wl", baseCheck.Name, 2): &autoscaling.ProvisioningRequest{
+				ProvisioningRequestName("wl", baseCheck.Name, 2): {
 					ObjectMeta: metav1.ObjectMeta{
 						Namespace: TestNamespace,
 						Name:      "wl-check1-2",
+						Labels: map[string]string{
+							constants.ManagedByKueueLabel: "true",
+						},
 						OwnerReferences: []metav1.OwnerReference{
 							{
 								Name: "wl",
@@ -1072,6 +1034,9 @@ func TestReconcile(t *testing.T) {
 							},
 						},
 						ProvisioningClassName: "class1",
+						Parameters: map[string]autoscaling.Parameter{
+							"p1": "v1",
+						},
 					},
 				},
 			},
@@ -1082,25 +1047,57 @@ func TestReconcile(t *testing.T) {
 					Reason:    "ProvisioningRequestCreated",
 					Message:   `Created ProvisioningRequest: "wl-check1-2"`,
 				},
-			},
-		},
-		"workloads reject the admission check when is not admitted and receives the provisioning request's BookingExpired condition": {
+			}},
+		"workload retries the admission check when is not admitted and receives the provisioning request's BookingExpired condition": {
 			workload: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
 				Admitted(false).
 				Obj(),
 			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
 			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
-			configs: []kueue.ProvisioningRequestConfig{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "config1",
-					},
-					Spec: kueue.ProvisioningRequestConfigSpec{
-						ProvisioningClassName: "class1",
-					},
-				},
+			configs: []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.Clone().RetryLimit(1).Obj()},
+			requests: []autoscaling.ProvisioningRequest{
+				*requestWithConditions(baseRequest,
+					[]metav1.Condition{
+						{
+							Type:   autoscaling.Failed,
+							Status: metav1.ConditionFalse,
+						},
+						{
+							Type:   autoscaling.Provisioned,
+							Status: metav1.ConditionTrue,
+						},
+						{
+							Type:   autoscaling.Accepted,
+							Status: metav1.ConditionTrue,
+						},
+						{
+							Type:   autoscaling.BookingExpired,
+							Status: metav1.ConditionTrue,
+						},
+					}),
 			},
-			maxRetries: 0,
+			wantWorkloads: map[string]*kueue.Workload{
+				baseWorkload.Name: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
+					AdmissionChecks(kueue.AdmissionCheckState{
+						Name:    "check1",
+						State:   kueue.CheckStateRetry,
+						Message: "Retrying after booking expired: ",
+					}, kueue.AdmissionCheckState{
+						Name:  "not-provisioning",
+						State: kueue.CheckStatePending,
+					}).
+					RequeueState(ptr.To[int32](1), nil).
+					Admitted(false).
+					Obj(),
+			},
+		},
+		"workload rejects the admission check when is not admitted and receives the provisioning request's BookingExpired condition": {
+			workload: (&utiltesting.WorkloadWrapper{Workload: *baseWorkload.DeepCopy()}).
+				Admitted(false).
+				Obj(),
+			checks:  []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
+			flavors: []kueue.ResourceFlavor{*baseFlavor1.DeepCopy(), *baseFlavor2.DeepCopy()},
+			configs: []kueue.ProvisioningRequestConfig{*baseConfigWithRetryStrategy.Clone().RetryLimit(0).Obj()},
 			requests: []autoscaling.ProvisioningRequest{
 				*requestWithConditions(baseRequest,
 					[]metav1.Condition{
@@ -1135,16 +1132,48 @@ func TestReconcile(t *testing.T) {
 					Obj(),
 			},
 		},
+		"when invalid provisioning request": {
+			workload: utiltesting.MakeWorkload("wl", TestNamespace).
+				Annotations(map[string]string{
+					"provreq.kueue.x-k8s.io/ValidUntilSeconds": "0",
+					"invalid-provreq-prefix/Foo1":              "Bar1",
+					"another-invalid-provreq-prefix/Foo2":      "Bar2"}).
+				AdmissionChecks(kueue.AdmissionCheckState{
+					Name:  "check1",
+					State: kueue.CheckStatePending}).
+				ReserveQuota(utiltesting.MakeAdmission("q1").Obj()).
+				Obj(),
+			checks:             []kueue.AdmissionCheck{*baseCheck.DeepCopy()},
+			configs:            []kueue.ProvisioningRequestConfig{*utiltesting.MakeProvisioningRequestConfig("config1").Obj()},
+			wantReconcileError: errInvalidProvisioningRequest,
+			wantEvents: []utiltesting.EventRecord{
+				{
+					Key:       client.ObjectKeyFromObject(baseWorkload),
+					EventType: corev1.EventTypeWarning,
+					Reason:    "FailedCreate",
+					Message:   `Error creating ProvisioningRequest "wl-check1-1": invalid ProvisioningRequest error`,
+				},
+			},
+		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			for _, gate := range tc.enableGates {
+				features.SetFeatureGateDuringTest(t, gate, true)
+			}
 			builder, ctx := getClientBuilder()
 			builder = builder.WithInterceptorFuncs(interceptor.Funcs{SubResourcePatch: utiltesting.TreatSSAAsStrategicMerge})
 
+			if tc.wantReconcileError != nil {
+				builder = builder.WithInterceptorFuncs(
+					interceptor.Funcs{
+						Create: func(ctx context.Context, client client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+							return tc.wantReconcileError
+						}})
+			}
 			builder = builder.WithObjects(tc.workload)
 			builder = builder.WithStatusSubresource(tc.workload)
-
 			builder = builder.WithLists(
 				&autoscaling.ProvisioningRequestList{Items: tc.requests},
 				&corev1.PodTemplateList{Items: tc.templates},
@@ -1158,7 +1187,6 @@ func TestReconcile(t *testing.T) {
 			controller, err := NewController(
 				k8sclient,
 				recorder,
-				WithMaxRetries(tc.maxRetries),
 			)
 			if err != nil {
 				t.Fatalf("Setting up the provisioning request controller: %v", err)
@@ -1171,7 +1199,7 @@ func TestReconcile(t *testing.T) {
 				},
 			}
 			_, gotReconcileError := controller.Reconcile(ctx, req)
-			if diff := cmp.Diff(tc.wantReconcileError, gotReconcileError); diff != "" {
+			if diff := cmp.Diff(tc.wantReconcileError, gotReconcileError, cmpopts.EquateErrors()); diff != "" {
 				t.Errorf("unexpected reconcile error (-want/+got):\n%s", diff)
 			}
 
@@ -1195,6 +1223,9 @@ func TestReconcile(t *testing.T) {
 				if diff := cmp.Diff(wantRequest, gotRequest, reqCmpOptions...); diff != "" {
 					t.Errorf("unexpected request %q (-want/+got):\n%s", name, diff)
 				}
+				if diff := cmp.Diff(wantRequest.GetLabels(), gotRequest.GetLabels()); diff != "" {
+					t.Errorf("unexpected request labels %q (-want/+got):\n%s", name, diff)
+				}
 			}
 
 			for name, wantTemplate := range tc.wantTemplates {
@@ -1205,6 +1236,9 @@ func TestReconcile(t *testing.T) {
 
 				if diff := cmp.Diff(wantTemplate, gotTemplate, tmplCmpOptions...); diff != "" {
 					t.Errorf("unexpected template %q (-want/+got):\n%s", name, diff)
+				}
+				if diff := cmp.Diff(wantTemplate.GetLabels(), gotTemplate.GetLabels()); diff != "" {
+					t.Errorf("unexpected template labels %q (-want/+got):\n%s", name, diff)
 				}
 			}
 
@@ -1250,17 +1284,8 @@ func TestActiveOrLastPRForChecks(t *testing.T) {
 			State: kueue.CheckStatePending,
 		}).
 		Obj()
-	baseConfig := &kueue.ProvisioningRequestConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "config1",
-		},
-		Spec: kueue.ProvisioningRequestConfigSpec{
-			ProvisioningClassName: "class1",
-			Parameters: map[string]kueue.Parameter{
-				"p1": "v1",
-			},
-		},
-	}
+
+	baseConfig := utiltesting.MakeProvisioningRequestConfig("config1").ProvisioningClass("class1").WithParameter("p1", "v1")
 
 	baseRequest := autoscaling.ProvisioningRequest{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1293,7 +1318,7 @@ func TestActiveOrLastPRForChecks(t *testing.T) {
 	pr2Created.Name = "wl-check-2"
 
 	baseCheck := utiltesting.MakeAdmissionCheck("check").
-		ControllerName(ControllerName).
+		ControllerName(kueue.ProvisioningRequestControllerName).
 		Parameters(kueue.GroupVersion.Group, ConfigKind, "config1").
 		Obj()
 
@@ -1325,9 +1350,10 @@ func TestActiveOrLastPRForChecks(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			workload := baseWorkload.DeepCopy()
-			relevantChecks := []string{"check"}
 			checks := []kueue.AdmissionCheck{*baseCheck.DeepCopy()}
-			configs := []kueue.ProvisioningRequestConfig{*baseConfig.DeepCopy()}
+			checkConfig := map[string]*kueue.ProvisioningRequestConfig{
+				baseCheck.Name: baseConfig.DeepCopy(),
+			}
 
 			builder, ctx := getClientBuilder()
 
@@ -1336,7 +1362,6 @@ func TestActiveOrLastPRForChecks(t *testing.T) {
 
 			builder = builder.WithLists(
 				&autoscaling.ProvisioningRequestList{Items: tc.requests},
-				&kueue.ProvisioningRequestConfigList{Items: configs},
 				&kueue.AdmissionCheckList{Items: checks},
 			)
 
@@ -1347,7 +1372,7 @@ func TestActiveOrLastPRForChecks(t *testing.T) {
 				t.Fatalf("Setting up the provisioning request controller: %v", err)
 			}
 
-			gotResult := controller.activeOrLastPRForChecks(ctx, workload, relevantChecks, tc.requests)
+			gotResult := controller.activeOrLastPRForChecks(ctx, workload, checkConfig, tc.requests)
 			if diff := cmp.Diff(tc.wantResult, gotResult, reqCmpOptions...); diff != "" {
 				t.Errorf("unexpected request %q (-want/+got):\n%s", name, diff)
 			}

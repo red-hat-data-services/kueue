@@ -21,13 +21,17 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/constants"
 	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
@@ -196,6 +200,116 @@ func TestReclaimablePods(t *testing.T) {
 	}
 }
 
+func TestPodSets(t *testing.T) {
+	jobSetTemplate := testingjobset.MakeJobSet("jobset", "ns")
+
+	testCases := map[string]struct {
+		jobSet      *JobSet
+		wantPodSets func(jobSet *JobSet) []kueue.PodSet
+	}{
+		"no annotations": {
+			jobSet: (*JobSet)(jobSetTemplate.DeepCopy().
+				ReplicatedJobs(
+					testingjobset.ReplicatedJobRequirements{Name: "job1", Replicas: 2, Parallelism: 1, Completions: 1},
+					testingjobset.ReplicatedJobRequirements{Name: "job2", Replicas: 3, Parallelism: 2, Completions: 3},
+				).
+				Obj()),
+			wantPodSets: func(jobSet *JobSet) []kueue.PodSet {
+				return []kueue.PodSet{
+					{
+						Name:     jobSet.Spec.ReplicatedJobs[0].Name,
+						Template: *jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.DeepCopy(),
+						Count:    2,
+					},
+					{
+						Name:     jobSet.Spec.ReplicatedJobs[1].Name,
+						Template: *jobSet.Spec.ReplicatedJobs[1].Template.Spec.Template.DeepCopy(),
+						Count:    6,
+					},
+				}
+			},
+		},
+		"with required topology annotation": {
+			jobSet: (*JobSet)(jobSetTemplate.DeepCopy().
+				ReplicatedJobs(
+					testingjobset.ReplicatedJobRequirements{
+						Name:        "job1",
+						Replicas:    2,
+						Parallelism: 1,
+						Completions: 1,
+						PodAnnotations: map[string]string{
+							kueuealpha.PodSetRequiredTopologyAnnotation: "cloud.com/block",
+						},
+					},
+					testingjobset.ReplicatedJobRequirements{Name: "job2", Replicas: 3, Parallelism: 2, Completions: 3},
+				).
+				Obj()),
+			wantPodSets: func(jobSet *JobSet) []kueue.PodSet {
+				return []kueue.PodSet{
+					{
+						Name:     jobSet.Spec.ReplicatedJobs[0].Name,
+						Template: *jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.DeepCopy(),
+						Count:    2,
+						TopologyRequest: &kueue.PodSetTopologyRequest{Required: ptr.To("cloud.com/block"),
+							PodIndexLabel:      ptr.To(batchv1.JobCompletionIndexAnnotation),
+							SubGroupIndexLabel: ptr.To(jobset.JobIndexKey),
+							SubGroupCount:      ptr.To[int32](2),
+						},
+					},
+					{
+						Name:     jobSet.Spec.ReplicatedJobs[1].Name,
+						Template: *jobSet.Spec.ReplicatedJobs[1].Template.Spec.Template.DeepCopy(),
+						Count:    6,
+					},
+				}
+			},
+		},
+		"with preferred topology annotation": {
+			jobSet: (*JobSet)(jobSetTemplate.DeepCopy().
+				ReplicatedJobs(
+					testingjobset.ReplicatedJobRequirements{Name: "job1", Replicas: 2, Parallelism: 1, Completions: 1},
+					testingjobset.ReplicatedJobRequirements{
+						Name:        "job2",
+						Replicas:    3,
+						Parallelism: 2,
+						Completions: 3,
+						PodAnnotations: map[string]string{
+							kueuealpha.PodSetPreferredTopologyAnnotation: "cloud.com/block",
+						},
+					},
+				).
+				Obj()),
+			wantPodSets: func(jobSet *JobSet) []kueue.PodSet {
+				return []kueue.PodSet{
+					{
+						Name:     jobSet.Spec.ReplicatedJobs[0].Name,
+						Template: *jobSet.Spec.ReplicatedJobs[0].Template.Spec.Template.DeepCopy(),
+						Count:    2,
+					},
+					{
+						Name:     jobSet.Spec.ReplicatedJobs[1].Name,
+						Template: *jobSet.Spec.ReplicatedJobs[1].Template.Spec.Template.DeepCopy(),
+						Count:    6,
+						TopologyRequest: &kueue.PodSetTopologyRequest{Preferred: ptr.To("cloud.com/block"),
+							PodIndexLabel:      ptr.To(batchv1.JobCompletionIndexAnnotation),
+							SubGroupIndexLabel: ptr.To(jobset.JobIndexKey),
+							SubGroupCount:      ptr.To[int32](3),
+						},
+					},
+				}
+			},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			gotPodSets := tc.jobSet.PodSets()
+			if diff := cmp.Diff(tc.wantPodSets(tc.jobSet), gotPodSets); diff != "" {
+				t.Errorf("pod sets mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 var (
 	jobCmpOpts = []cmp.Option{
 		cmpopts.EquateEmpty(),
@@ -217,6 +331,15 @@ func TestReconciler(t *testing.T) {
 	basePCWrapper := utiltesting.MakePriorityClass("test-pc").
 		PriorityValue(200)
 
+	testNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ns",
+			Labels: map[string]string{
+				"kubernetes.io/metadata.name": "ns",
+			},
+		},
+	}
+
 	cases := map[string]struct {
 		reconcilerOptions []jobframework.Option
 		job               *jobset.JobSet
@@ -228,6 +351,7 @@ func TestReconciler(t *testing.T) {
 		"workload is created with podsets and a ProvReq annotation": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: testingjobset.MakeJobSet("jobset", "ns").ReplicatedJobs(
 				testingjobset.ReplicatedJobRequirements{
@@ -278,6 +402,7 @@ func TestReconciler(t *testing.T) {
 		"workload is created with podsets and workloadPriorityClass": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: testingjobset.MakeJobSet("jobset", "ns").ReplicatedJobs(
 				testingjobset.ReplicatedJobRequirements{
@@ -312,6 +437,7 @@ func TestReconciler(t *testing.T) {
 		"workload is created with podsets and PriorityClass": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: testingjobset.MakeJobSet("jobset", "ns").ReplicatedJobs(
 				testingjobset.ReplicatedJobRequirements{
@@ -346,6 +472,7 @@ func TestReconciler(t *testing.T) {
 		"workload is created with podsets, workloadPriorityClass and PriorityClass": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: testingjobset.MakeJobSet("jobset", "ns").ReplicatedJobs(
 				testingjobset.ReplicatedJobRequirements{
@@ -386,7 +513,7 @@ func TestReconciler(t *testing.T) {
 			if err := SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder)); err != nil {
 				t.Fatalf("Could not setup indexes: %v", err)
 			}
-			objs := append(tc.priorityClasses, tc.job)
+			objs := append(tc.priorityClasses, tc.job, testNamespace)
 			kClient := clientBuilder.WithObjects(objs...).Build()
 			recorder := record.NewBroadcaster().NewRecorder(kClient.Scheme(), corev1.EventSource{Component: "test"})
 			reconciler := NewReconciler(kClient, recorder, tc.reconcilerOptions...)

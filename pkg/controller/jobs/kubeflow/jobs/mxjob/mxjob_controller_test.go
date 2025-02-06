@@ -17,6 +17,7 @@ limitations under the License.
 package mxjob
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -24,12 +25,15 @@ import (
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	controllerconsts "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
@@ -295,6 +299,127 @@ func TestOrderedReplicaTypes(t *testing.T) {
 	}
 }
 
+func TestPodSets(t *testing.T) {
+	testCases := map[string]struct {
+		job         *kftraining.MXJob
+		wantPodSets func(job *kftraining.MXJob) []kueue.PodSet
+	}{
+		"no annotations": {
+			job: testingmxjob.MakeMXJob("mxjob", "ns").Obj(),
+			wantPodSets: func(job *kftraining.MXJob) []kueue.PodSet {
+				return []kueue.PodSet{
+					{
+						Name:     strings.ToLower(string(kftraining.MXJobReplicaTypeScheduler)),
+						Template: job.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeScheduler].Template,
+						Count:    1,
+					},
+					{
+						Name:     strings.ToLower(string(kftraining.MXJobReplicaTypeServer)),
+						Template: job.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeServer].Template,
+						Count:    1,
+					},
+					{
+						Name:     strings.ToLower(string(kftraining.MXJobReplicaTypeWorker)),
+						Template: job.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeWorker].Template,
+						Count:    1,
+					},
+				}
+			},
+		},
+		"with required and preferred topology annotation": {
+			job: testingmxjob.MakeMXJob("mxjob", "ns").
+				PodAnnotation(kftraining.MXJobReplicaTypeScheduler, kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/rack").
+				PodAnnotation(kftraining.MXJobReplicaTypeServer, kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantPodSets: func(job *kftraining.MXJob) []kueue.PodSet {
+				return []kueue.PodSet{
+					{
+						Name:     strings.ToLower(string(kftraining.MXJobReplicaTypeScheduler)),
+						Template: job.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeScheduler].Template,
+						Count:    1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{Required: ptr.To("cloud.com/rack"),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel)},
+					},
+					{
+						Name:     strings.ToLower(string(kftraining.MXJobReplicaTypeServer)),
+						Template: job.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeServer].Template,
+						Count:    1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{Preferred: ptr.To("cloud.com/block"),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+					{
+						Name:     strings.ToLower(string(kftraining.MXJobReplicaTypeWorker)),
+						Template: job.Spec.MXReplicaSpecs[kftraining.MXJobReplicaTypeWorker].Template,
+						Count:    1,
+					},
+				}
+			},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			gotPodSets := fromObject(tc.job).PodSets()
+			if diff := cmp.Diff(tc.wantPodSets(tc.job), gotPodSets); diff != "" {
+				t.Errorf("pod sets mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestValidate(t *testing.T) {
+	testCases := map[string]struct {
+		job      *kftraining.MXJob
+		wantErrs field.ErrorList
+	}{
+		"no annotations": {
+			job: testingmxjob.MakeMXJob("mxjob", "ns").Obj(),
+		},
+		"valid TAS request": {
+			job: testingmxjob.MakeMXJob("mxjob", "ns").
+				PodAnnotation(kftraining.MXJobReplicaTypeScheduler, kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/rack").
+				PodAnnotation(kftraining.MXJobReplicaTypeServer, kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+		},
+		"invalid TAS request": {
+			job: testingmxjob.MakeMXJob("mxjob", "ns").
+				PodAnnotation(kftraining.MXJobReplicaTypeScheduler, kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/rack").
+				PodAnnotation(kftraining.MXJobReplicaTypeScheduler, kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kftraining.MXJobReplicaTypeServer, kueuealpha.PodSetRequiredTopologyAnnotation, "cloud.com/rack").
+				PodAnnotation(kftraining.MXJobReplicaTypeServer, kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				PodAnnotation(kftraining.MXJobReplicaTypeWorker, kueuealpha.PodSetPreferredTopologyAnnotation, "cloud.com/block").
+				Obj(),
+			wantErrs: field.ErrorList{
+				field.Invalid(
+					field.NewPath("spec", "mxReplicaSpecs").
+						Key(string(kftraining.MXJobReplicaTypeScheduler)).
+						Child("template", "metadata", "annotations"),
+					field.OmitValueType{},
+					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`,
+				),
+				field.Invalid(
+					field.NewPath("spec", "mxReplicaSpecs").
+						Key(string(kftraining.MXJobReplicaTypeServer)).
+						Child("template", "metadata", "annotations"),
+					field.OmitValueType{},
+					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`,
+				),
+			},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			if diff := cmp.Diff(tc.wantErrs, fromObject(tc.job).ValidateOnCreate()); diff != "" {
+				t.Errorf("validate create error list mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tc.wantErrs, fromObject(tc.job).ValidateOnUpdate(nil)); diff != "" {
+				t.Errorf("validate create error list mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 var (
 	jobCmpOpts = cmp.Options{
 		cmpopts.EquateEmpty(),
@@ -310,6 +435,14 @@ var (
 )
 
 func TestReconciler(t *testing.T) {
+	testNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ns",
+			Labels: map[string]string{
+				"kubernetes.io/metadata.name": "ns",
+			},
+		},
+	}
 	cases := map[string]struct {
 		reconcilerOptions []jobframework.Option
 		job               *kftraining.MXJob
@@ -322,6 +455,7 @@ func TestReconciler(t *testing.T) {
 		"workload is created with podsets": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job:     testingmxjob.MakeMXJob("mxjob", "ns").Parallelism(2, 2).Obj(),
 			wantJob: testingmxjob.MakeMXJob("mxjob", "ns").Parallelism(2, 2).Obj(),
@@ -338,6 +472,7 @@ func TestReconciler(t *testing.T) {
 		"workload is created with a ProvReq annotation": {
 			reconcilerOptions: []jobframework.Option{
 				jobframework.WithManageJobsWithoutQueueName(true),
+				jobframework.WithManagedJobsNamespaceSelector(labels.Everything()),
 			},
 			job: testingmxjob.MakeMXJob("mxjob", "ns").
 				Annotations(map[string]string{
@@ -588,7 +723,7 @@ func TestReconciler(t *testing.T) {
 				t.Fatalf("Failed to setup indexes: %v", err)
 			}
 			kcBuilder = kcBuilder.
-				WithObjects(tc.job).
+				WithObjects(tc.job, testNamespace).
 				WithLists(&kueue.ResourceFlavorList{Items: tc.flavors})
 			for i := range tc.workloads {
 				kcBuilder = kcBuilder.WithStatusSubresource(&tc.workloads[i])

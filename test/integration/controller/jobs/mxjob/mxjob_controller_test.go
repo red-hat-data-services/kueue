@@ -17,19 +17,28 @@ limitations under the License.
 package mxjob
 
 import (
+	"strings"
+
+	"github.com/google/go-cmp/cmp/cmpopts"
 	kftraining "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v1"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta1"
+	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	workloadmxjob "sigs.k8s.io/kueue/pkg/controller/jobs/kubeflow/jobs/mxjob"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/kubeflow/kubeflowjob"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/util/testing"
 	testingmxjob "sigs.k8s.io/kueue/pkg/util/testingjobs/mxjob"
+	testingnode "sigs.k8s.io/kueue/pkg/util/testingjobs/node"
 	kftesting "sigs.k8s.io/kueue/test/integration/controller/jobs/kubeflow"
 	"sigs.k8s.io/kueue/test/integration/framework"
 	"sigs.k8s.io/kueue/test/util"
@@ -42,21 +51,21 @@ const (
 	priorityValue     = 10
 )
 
-// +kubebuilder:docs-gen:collapse=Imports
-
-var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
+var _ = ginkgo.Describe("Job controller", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	ginkgo.BeforeAll(func() {
-		fwk = &framework.Framework{
-			CRDPath:     crdPath,
-			DepCRDPaths: []string{mxnetCrdPath},
+		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithManageJobsWithoutQueueName(true),
+			jobframework.WithManagedJobsNamespaceSelector(util.NewNamespaceSelectorExcluding("unmanaged-ns"))))
+		unmanagedNamespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "unmanaged-ns",
+			},
 		}
-		cfg = fwk.Init()
-		ctx, k8sClient = fwk.RunManager(cfg, managerSetup(jobframework.WithManageJobsWithoutQueueName(true)))
-	})
-	ginkgo.AfterAll(func() {
-		fwk.Teardown()
+		gomega.Expect(k8sClient.Create(ctx, unmanagedNamespace)).To(gomega.Succeed())
 	})
 
+	ginkgo.AfterAll(func() {
+		fwk.StopManager(ctx)
+	})
 	var (
 		ns *corev1.Namespace
 	)
@@ -91,28 +100,31 @@ var _ = ginkgo.Describe("Job controller", ginkgo.Ordered, ginkgo.ContinueOnFailu
 			},
 		})
 	})
+
+	ginkgo.It("Should not manage a job without a queue-name submittted to an unmanaged namespace", func() {
+		ginkgo.By("Creating an unsuspended job without a queue-name in unmanaged-ns")
+		kfJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(testingmxjob.MakeMXJob(jobName, "unmanaged-ns").Suspend(false).Obj())}
+		createdJob := kubeflowjob.KubeflowJob{KFJobControl: (*workloadmxjob.JobControl)(&kftraining.MXJob{})}
+		kftesting.ShouldNotReconcileUnmanagedJob(ctx, k8sClient, kfJob, createdJob)
+	})
 })
 
-var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
+var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	var (
 		ns            *corev1.Namespace
 		defaultFlavor = testing.MakeResourceFlavor("default").NodeLabel(instanceKey, "default").Obj()
 	)
 
 	ginkgo.BeforeAll(func() {
-		fwk = &framework.Framework{
-			CRDPath:     crdPath,
-			DepCRDPaths: []string{mxnetCrdPath},
-		}
-		cfg := fwk.Init()
-		ctx, k8sClient = fwk.RunManager(cfg, managerSetup(jobframework.WithWaitForPodsReady(&configapi.WaitForPodsReady{Enable: true})))
+		fwk.StartManager(ctx, cfg, managerSetup(jobframework.WithWaitForPodsReady(&configapi.WaitForPodsReady{Enable: true})))
 
 		ginkgo.By("Create a resource flavor")
 		gomega.Expect(k8sClient.Create(ctx, defaultFlavor)).Should(gomega.Succeed())
 	})
+
 	ginkgo.AfterAll(func() {
 		util.ExpectObjectToBeDeleted(ctx, k8sClient, defaultFlavor, true)
-		fwk.Teardown()
+		fwk.StopManager(ctx)
 	})
 
 	ginkgo.BeforeEach(func() {
@@ -231,7 +243,7 @@ var _ = ginkgo.Describe("Job controller when waitForPodsReady enabled", ginkgo.O
 	)
 })
 
-var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
+var _ = ginkgo.Describe("Job controller interacting with scheduler", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 	var (
 		ns                  *corev1.Namespace
 		onDemandFlavor      *kueue.ResourceFlavor
@@ -241,15 +253,11 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 	)
 
 	ginkgo.BeforeAll(func() {
-		fwk = &framework.Framework{
-			CRDPath:     crdPath,
-			DepCRDPaths: []string{mxnetCrdPath},
-		}
-		cfg := fwk.Init()
-		ctx, k8sClient = fwk.RunManager(cfg, managerAndSchedulerSetup())
+		fwk.StartManager(ctx, cfg, managerAndSchedulerSetup(false))
 	})
+
 	ginkgo.AfterAll(func() {
-		fwk.Teardown()
+		fwk.StopManager(ctx)
 	})
 
 	ginkgo.BeforeEach(func() {
@@ -307,6 +315,162 @@ var _ = ginkgo.Describe("Job controller interacting with scheduler", ginkgo.Orde
 				RoleName:    kftraining.MXJobReplicaTypeWorker,
 				ResourceCPU: kueue.ResourceFlavorReference(onDemandFlavor.Name),
 			},
+		})
+	})
+})
+
+var _ = ginkgo.Describe("MXJob controller when TopologyAwareScheduling enabled", framework.RedundantSpec, ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
+	const (
+		nodeGroupLabel = "node-group"
+	)
+
+	var (
+		ns           *corev1.Namespace
+		nodes        []corev1.Node
+		topology     *kueuealpha.Topology
+		tasFlavor    *kueue.ResourceFlavor
+		clusterQueue *kueue.ClusterQueue
+		localQueue   *kueue.LocalQueue
+	)
+
+	ginkgo.BeforeAll(func() {
+		fwk.StartManager(ctx, cfg, managerAndSchedulerSetup(true))
+	})
+
+	ginkgo.AfterAll(func() {
+		fwk.StopManager(ctx)
+	})
+
+	ginkgo.BeforeEach(func() {
+		features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.TopologyAwareScheduling, true)
+
+		ns = &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "tas-mxjob-",
+			},
+		}
+		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+
+		nodes = []corev1.Node{
+			*testingnode.MakeNode("b1r1").
+				Label(nodeGroupLabel, "tas").
+				Label(testing.DefaultBlockTopologyLevel, "b1").
+				Label(testing.DefaultRackTopologyLevel, "r1").
+				StatusAllocatable(corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1"),
+					corev1.ResourceMemory: resource.MustParse("1Gi"),
+				}).
+				Ready().
+				Obj(),
+		}
+		util.CreateNodes(ctx, k8sClient, nodes)
+
+		topology = testing.MakeDefaultTwoLevelTopology("default")
+		gomega.Expect(k8sClient.Create(ctx, topology)).Should(gomega.Succeed())
+
+		tasFlavor = testing.MakeResourceFlavor("tas-flavor").
+			NodeLabel(nodeGroupLabel, "tas").
+			TopologyName("default").Obj()
+		gomega.Expect(k8sClient.Create(ctx, tasFlavor)).Should(gomega.Succeed())
+
+		clusterQueue = testing.MakeClusterQueue("cluster-queue").
+			ResourceGroup(*testing.MakeFlavorQuotas(tasFlavor.Name).Resource(corev1.ResourceCPU, "5").Obj()).
+			Obj()
+		gomega.Expect(k8sClient.Create(ctx, clusterQueue)).Should(gomega.Succeed())
+		util.ExpectClusterQueuesToBeActive(ctx, k8sClient, clusterQueue)
+
+		localQueue = testing.MakeLocalQueue("local-queue", ns.Name).ClusterQueue(clusterQueue.Name).Obj()
+		gomega.Expect(k8sClient.Create(ctx, localQueue)).Should(gomega.Succeed())
+	})
+
+	ginkgo.AfterEach(func() {
+		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, tasFlavor, true)
+		util.ExpectObjectToBeDeleted(ctx, k8sClient, topology, true)
+		for _, node := range nodes {
+			util.ExpectObjectToBeDeleted(ctx, k8sClient, &node, true)
+		}
+	})
+
+	ginkgo.It("should admit workload which fits in a required topology domain", func() {
+		mxJob := testingmxjob.MakeMXJob("mxjob", ns.Name).
+			Queue(localQueue.Name).
+			Request(kftraining.MXJobReplicaTypeScheduler, corev1.ResourceCPU, "100m").
+			Request(kftraining.MXJobReplicaTypeServer, corev1.ResourceCPU, "100m").
+			Request(kftraining.MXJobReplicaTypeWorker, corev1.ResourceCPU, "100m").
+			PodAnnotation(kftraining.MXJobReplicaTypeScheduler, kueuealpha.PodSetRequiredTopologyAnnotation, testing.DefaultBlockTopologyLevel).
+			PodAnnotation(kftraining.MXJobReplicaTypeServer, kueuealpha.PodSetRequiredTopologyAnnotation, testing.DefaultBlockTopologyLevel).
+			PodAnnotation(kftraining.MXJobReplicaTypeWorker, kueuealpha.PodSetPreferredTopologyAnnotation, testing.DefaultRackTopologyLevel).
+			Obj()
+		ginkgo.By("creating a MXJob", func() {
+			gomega.Expect(k8sClient.Create(ctx, mxJob)).Should(gomega.Succeed())
+		})
+
+		wl := &kueue.Workload{}
+		wlLookupKey := types.NamespacedName{Name: workloadmxjob.GetWorkloadNameForMXJob(mxJob.Name, mxJob.UID), Namespace: ns.Name}
+
+		ginkgo.By("verify the workload is created", func() {
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, wlLookupKey, wl)).Should(gomega.Succeed())
+				g.Expect(wl.Spec.PodSets).Should(gomega.BeComparableTo([]kueue.PodSet{
+					{
+						Name:  strings.ToLower(string(kftraining.MXJobReplicaTypeScheduler)),
+						Count: 1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{
+							Required:      ptr.To(testing.DefaultBlockTopologyLevel),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+					{
+						Name:  strings.ToLower(string(kftraining.MXJobReplicaTypeServer)),
+						Count: 1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{
+							Required:      ptr.To(testing.DefaultBlockTopologyLevel),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+					{
+						Name:  strings.ToLower(string(kftraining.MXJobReplicaTypeWorker)),
+						Count: 1,
+						TopologyRequest: &kueue.PodSetTopologyRequest{
+							Preferred:     ptr.To(testing.DefaultRackTopologyLevel),
+							PodIndexLabel: ptr.To(kftraining.ReplicaIndexLabel),
+						},
+					},
+				}, cmpopts.IgnoreFields(kueue.PodSet{}, "Template")))
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
+		})
+
+		ginkgo.By("verify the workload is admitted", func() {
+			util.ExpectWorkloadsToBeAdmitted(ctx, k8sClient, wl)
+			util.ExpectReservingActiveWorkloadsMetric(clusterQueue, 1)
+		})
+
+		ginkgo.By("verify admission for the workload", func() {
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, wlLookupKey, wl)).Should(gomega.Succeed())
+				g.Expect(wl.Status.Admission).ShouldNot(gomega.BeNil())
+				g.Expect(wl.Status.Admission.PodSetAssignments).Should(gomega.HaveLen(3))
+				g.Expect(wl.Status.Admission.PodSetAssignments[0].TopologyAssignment).Should(gomega.BeComparableTo(
+					&kueue.TopologyAssignment{
+						Levels:  []string{testing.DefaultBlockTopologyLevel, testing.DefaultRackTopologyLevel},
+						Domains: []kueue.TopologyDomainAssignment{{Count: 1, Values: []string{"b1", "r1"}}},
+					},
+				))
+				g.Expect(wl.Status.Admission.PodSetAssignments[1].TopologyAssignment).Should(gomega.BeComparableTo(
+					&kueue.TopologyAssignment{
+						Levels:  []string{testing.DefaultBlockTopologyLevel, testing.DefaultRackTopologyLevel},
+						Domains: []kueue.TopologyDomainAssignment{{Count: 1, Values: []string{"b1", "r1"}}},
+					},
+				))
+				g.Expect(wl.Status.Admission.PodSetAssignments[1].TopologyAssignment).Should(gomega.BeComparableTo(
+					&kueue.TopologyAssignment{
+						Levels:  []string{testing.DefaultBlockTopologyLevel, testing.DefaultRackTopologyLevel},
+						Domains: []kueue.TopologyDomainAssignment{{Count: 1, Values: []string{"b1", "r1"}}},
+					},
+				))
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
 		})
 	})
 })

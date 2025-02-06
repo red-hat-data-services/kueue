@@ -106,11 +106,18 @@ func (a *Assignment) ToAPI() []kueue.PodSetAssignment {
 	return psFlavors
 }
 
+// TotalRequestsFor - returns the total quota needs of the wl, taking into account the potential
+// scaling needed in case of partial admission.
 func (a *Assignment) TotalRequestsFor(wl *workload.Info) resources.FlavorResourceQuantities {
 	usage := make(resources.FlavorResourceQuantities)
 	for i, ps := range wl.TotalRequests {
+		// in case of partial admission scale down the quantity
+		aps := a.PodSets[i]
+		if aps.Count != ps.Count {
+			ps = *ps.ScaledTo(aps.Count)
+		}
 		for res, q := range ps.Requests {
-			flv := a.PodSets[i].Flavors[res].Name
+			flv := aps.Flavors[res].Name
 			usage[resources.FlavorResource{Flavor: flv, Resource: res}] += q
 		}
 	}
@@ -167,6 +174,8 @@ type PodSetAssignment struct {
 	Status   *Status
 	Requests corev1.ResourceList
 	Count    int32
+
+	TopologyAssignment *kueue.TopologyAssignment
 }
 
 // RepresentativeMode calculates the representative mode for this assignment as
@@ -195,10 +204,11 @@ func (psa *PodSetAssignment) toAPI() kueue.PodSetAssignment {
 		flavors[res] = flvAssignment.Name
 	}
 	return kueue.PodSetAssignment{
-		Name:          psa.Name,
-		Flavors:       flavors,
-		ResourceUsage: psa.Requests,
-		Count:         ptr.To(psa.Count),
+		Name:               psa.Name,
+		Flavors:            flavors,
+		ResourceUsage:      psa.Requests,
+		Count:              ptr.To(psa.Count),
+		TopologyAssignment: psa.TopologyAssignment.DeepCopy(),
 	}
 }
 
@@ -287,8 +297,7 @@ func New(wl *workload.Info, cq *cache.ClusterQueueSnapshot, resourceFlavors map[
 }
 
 func lastAssignmentOutdated(wl *workload.Info, cq *cache.ClusterQueueSnapshot) bool {
-	return cq.AllocatableResourceGeneration > wl.LastAssignment.ClusterQueueGeneration ||
-		(cq.Cohort != nil && cq.Cohort.AllocatableResourceGeneration > wl.LastAssignment.CohortGeneration)
+	return cq.AllocatableResourceGeneration > wl.LastAssignment.ClusterQueueGeneration
 }
 
 // Assign assigns a flavor to each of the resources requested in each pod set.
@@ -302,40 +311,30 @@ func (a *FlavorAssigner) Assign(log logr.Logger, counts []int32) Assignment {
 				"cq.AllocatableResourceGeneration", a.cq.AllocatableResourceGeneration,
 				"wl.LastAssignment.ClusterQueueGeneration", a.wl.LastAssignment.ClusterQueueGeneration,
 			}
-			if a.cq.Cohort != nil {
-				keysValues = append(keysValues,
-					"cq.Cohort.AllocatableResourceGeneration", a.cq.Cohort.AllocatableResourceGeneration,
-					"wl.LastAssignment.CohortGeneration", a.wl.LastAssignment.CohortGeneration,
-				)
-			}
 			logV.Info("Clearing Workload's last assignment because it was outdated", keysValues...)
 		}
 		a.wl.LastAssignment = nil
 	}
-
-	if len(counts) == 0 {
-		return a.assignFlavors(log, a.wl.TotalRequests)
-	}
-
-	currentResources := make([]workload.PodSetResources, len(a.wl.TotalRequests))
-	for i := range a.wl.TotalRequests {
-		currentResources[i] = *a.wl.TotalRequests[i].ScaledTo(counts[i])
-	}
-	return a.assignFlavors(log, currentResources)
+	return a.assignFlavors(log, counts)
 }
 
-func (a *FlavorAssigner) assignFlavors(log logr.Logger, requests []workload.PodSetResources) Assignment {
+func (a *FlavorAssigner) assignFlavors(log logr.Logger, counts []int32) Assignment {
+	var requests []workload.PodSetResources
+	if len(counts) == 0 {
+		requests = a.wl.TotalRequests
+	} else {
+		requests = make([]workload.PodSetResources, len(a.wl.TotalRequests))
+		for i := range a.wl.TotalRequests {
+			requests[i] = *a.wl.TotalRequests[i].ScaledTo(counts[i])
+		}
+	}
 	assignment := Assignment{
 		PodSets: make([]PodSetAssignment, 0, len(requests)),
 		Usage:   make(resources.FlavorResourceQuantities),
 		LastState: workload.AssignmentClusterQueueState{
 			LastTriedFlavorIdx:     make([]map[corev1.ResourceName]int, 0, len(requests)),
-			CohortGeneration:       0,
 			ClusterQueueGeneration: a.cq.AllocatableResourceGeneration,
 		},
-	}
-	if a.cq.Cohort != nil {
-		assignment.LastState.CohortGeneration = a.cq.Cohort.AllocatableResourceGeneration
 	}
 
 	for i, podSet := range requests {
@@ -363,6 +362,11 @@ func (a *FlavorAssigner) assignFlavors(log logr.Logger, requests []workload.PodS
 				break
 			}
 			psAssignment.append(flavors, status)
+		}
+		if features.Enabled(features.TopologyAwareScheduling) {
+			if a.wl.Obj.Spec.PodSets[i].TopologyRequest != nil {
+				assignTopology(log, &psAssignment, a.cq, a.wl.TotalRequests[i], &a.wl.Obj.Spec.PodSets[i])
+			}
 		}
 
 		assignment.append(podSet.Requests, &psAssignment)
@@ -419,7 +423,8 @@ func (a *FlavorAssigner) findFlavorForPodSetResource(
 
 	status := &Status{}
 	requests = filterRequestedResources(requests, resourceGroup.CoveredResources)
-	podSpec := &a.wl.Obj.Spec.PodSets[psID].Template.Spec
+	ps := &a.wl.Obj.Spec.PodSets[psID]
+	podSpec := &ps.Template.Spec
 
 	var bestAssignment ResourceAssignment
 	bestAssignmentMode := noFit
@@ -437,7 +442,14 @@ func (a *FlavorAssigner) findFlavorForPodSetResource(
 			status.append(fmt.Sprintf("flavor %s not found", fName))
 			continue
 		}
-		taint, untolerated := corev1helpers.FindMatchingUntoleratedTaint(flavor.Spec.NodeTaints, podSpec.Tolerations, func(t *corev1.Taint) bool {
+		if features.Enabled(features.TopologyAwareScheduling) {
+			if message := checkPodSetAndFlavorMatchForTAS(a.cq, ps, flavor); message != nil {
+				log.Error(nil, *message)
+				status.append(*message)
+				continue
+			}
+		}
+		taint, untolerated := corev1helpers.FindMatchingUntoleratedTaint(flavor.Spec.NodeTaints, append(podSpec.Tolerations, flavor.Spec.Tolerations...), func(t *corev1.Taint) bool {
 			return t.Effect == corev1.TaintEffectNoSchedule || t.Effect == corev1.TaintEffectNoExecute
 		})
 		if untolerated {
@@ -588,59 +600,39 @@ func flavorSelector(spec *corev1.PodSpec, allowedKeys sets.Set[string]) nodeaffi
 // if borrowing is required when preempting.
 // If the flavor doesn't satisfy limits immediately (when waiting or preemption
 // could help), it returns a Status with reasons.
-func (a *FlavorAssigner) fitsResourceQuota(log logr.Logger, fr resources.FlavorResource, val int64, rQuota *cache.ResourceQuota) (granularMode, bool, *Status) {
+func (a *FlavorAssigner) fitsResourceQuota(log logr.Logger, fr resources.FlavorResource, val int64, rQuota cache.ResourceQuota) (granularMode, bool, *Status) {
 	var status Status
-	var borrow bool
-	used := a.cq.Usage[fr]
+
+	borrow := a.cq.BorrowingWith(fr, val) && a.cq.HasParent()
+	available := a.cq.Available(fr)
+	maxCapacity := a.cq.PotentialAvailable(fr)
+
+	// No Fit
+	if val > maxCapacity {
+		status.append(fmt.Sprintf("insufficient quota for %s in flavor %s, request > maximum capacity (%s > %s)",
+			fr.Resource, fr.Flavor, resources.ResourceQuantityString(fr.Resource, val), resources.ResourceQuantityString(fr.Resource, maxCapacity)))
+		return noFit, false, &status
+	}
+
+	// Fit
+	if val <= available {
+		return fit, borrow, nil
+	}
+
+	// Check if preemption is possible
 	mode := noFit
 	if val <= rQuota.Nominal {
-		// The request can be satisfied by the nominal quota, assuming quota is
-		// reclaimed from the cohort or assuming all active workloads in the
-		// ClusterQueue are preempted.
+		mode = preempt
+		if a.oracle.IsReclaimPossible(log, a.cq, *a.wl, fr, val) {
+			mode = reclaim
+		}
+	} else if a.canPreemptWhileBorrowing() {
 		mode = preempt
 	}
-	cohortAvailable := rQuota.Nominal
-	if a.cq.Cohort != nil {
-		cohortAvailable = a.cq.RequestableCohortQuota(fr)
-	}
 
-	if a.canPreemptWhileBorrowing() {
-		// when preemption with borrowing is enabled, we can succeed to admit the
-		// workload if preemption is used.
-		if (rQuota.BorrowingLimit == nil || val <= rQuota.Nominal+*rQuota.BorrowingLimit) && val <= cohortAvailable {
-			mode = preempt
-			borrow = val > rQuota.Nominal
-		}
-	}
-	if rQuota.BorrowingLimit != nil && used+val > rQuota.Nominal+*rQuota.BorrowingLimit {
-		status.append(fmt.Sprintf("borrowing limit for %s in flavor %s exceeded", fr.Resource, fr.Flavor))
-		return mode, borrow, &status
-	}
+	status.append(fmt.Sprintf("insufficient unused quota for %s in flavor %s, %s more needed",
+		fr.Resource, fr.Flavor, resources.ResourceQuantityString(fr.Resource, val-available)))
 
-	if a.oracle.IsReclaimPossible(log, a.cq, *a.wl, fr, val) {
-		mode = reclaim
-	}
-
-	cohortUsed := used
-	if a.cq.Cohort != nil {
-		cohortUsed = a.cq.UsedCohortQuota(fr)
-	}
-
-	lack := cohortUsed + val - cohortAvailable
-	if lack <= 0 {
-		return fit, used+val > rQuota.Nominal, nil
-	}
-
-	lackQuantity := resources.ResourceQuantity(fr.Resource, lack)
-	msg := fmt.Sprintf("insufficient unused quota in cohort for %s in flavor %s, %s more needed", fr.Resource, fr.Flavor, &lackQuantity)
-	if a.cq.Cohort == nil {
-		if mode == noFit {
-			msg = fmt.Sprintf("insufficient quota for %s in flavor %s in ClusterQueue", fr.Resource, fr.Flavor)
-		} else {
-			msg = fmt.Sprintf("insufficient unused quota for %s in flavor %s, %s more needed", fr.Resource, fr.Flavor, &lackQuantity)
-		}
-	}
-	status.append(msg)
 	return mode, borrow, &status
 }
 
