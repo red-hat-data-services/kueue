@@ -1,7 +1,7 @@
-FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:v1.23@sha256:744be415305e1cf3701484b69e41bd67df2e0b728a5804fa170069cec6c9a189 AS golang
+FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder@sha256:e5f5973d201e688987434e3a92d531fa62ec2defa0ff04f51c324b7c82e29dc8 AS golang
 
 FROM registry.redhat.io/ubi8/ubi:latest AS builder
-ARG GOLANG_VERSION=1.23.0
+ARG GOLANG_VERSION=1.23.2
 
 # Install system dependencies
 RUN dnf upgrade -y && dnf install -y \
