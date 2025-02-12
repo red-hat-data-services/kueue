@@ -1,4 +1,4 @@
-FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder@sha256:e5f5973d201e688987434e3a92d531fa62ec2defa0ff04f51c324b7c82e29dc8 AS golang
+FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder@sha256:ca0c771ecd4f606986253f747e2773fe2960a6b5e8e7a52f6a4797b173ac7f56 AS golang
 
 FROM registry.redhat.io/ubi8/ubi:latest AS builder
 ARG GOLANG_VERSION=1.23.2
