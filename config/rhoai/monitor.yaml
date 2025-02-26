@@ -1,4 +1,4 @@
-# Prometheus Pod Monitor (Metrics)
+# Prometheus Service Monitor (Metrics)
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -10,8 +10,13 @@ spec:
       app.kubernetes.io/name: kueue
       app.kubernetes.io/component: controller
   endpoints:
-  - port: https-metrics
+  - authorization:
+      credentials:
+        key: token
+        name: controller-manager-metrics-token
+      type: Bearer
+    path: /metrics
+    port: https-metrics
     scheme: https
     tlsConfig:
       insecureSkipVerify: true
-    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
