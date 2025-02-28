@@ -10,6 +10,5 @@ spec:
     targetPort: https-metrics
   selector:
     app.kubernetes.io/name: kueue
-    app.kubernetes.io/part-of: kueue
 status:
   loadBalancer: {}

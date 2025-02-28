@@ -47,6 +47,9 @@ resources:
 - batch-user-rolebinding.yaml
 - kueue-metrics-service.yaml
 - prometheus_rule.yaml
+- kueue_metrics_reader_serviceaccount.yaml
+- metrics_reader_clusterrole_binding.yaml
+- kueue_metrics_reader_secret.yaml
 
 patches:
 # Mount the controller config file for loading manager configurations
@@ -62,3 +65,25 @@ patches:
 - path: validating_webhook_patch.yaml
 - path: clusterqueue_viewer_role_patch.yaml
 - path: remove_default_namespace.yaml
+
+replacements:
+  - source:
+      kind: ServiceAccount
+      name: controller-manager-metrics-reader
+      fieldPath: metadata.name
+    targets:
+      - select:
+          kind: Secret
+          name: controller-manager-metrics-token
+        fieldPaths:
+          - metadata.annotations.[kubernetes.io/service-account.name]
+  - source:
+      kind: Secret
+      name: controller-manager-metrics-token
+      fieldPath: metadata.name
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: controller-manager-metrics-monitor
+        fieldPaths:
+          - spec.endpoints.0.authorization.credentials.name
