@@ -9,14 +9,14 @@ arches:
     size: 10923404
     checksum: sha256:8376018e552fa4544c3d10af14be5a80c962494aae4dd538848b9546ef392a98
     name: cpp
-    evr: 8.5.0-22.el8_10
+    evr: 8.5.0-23.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/g/gcc-8.5.0-22.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-appstream-rpms
     size: 24572708
     checksum: sha256:4d283a39969e559c70a93e26d9393e6ec0db39399595deec995f21e277c4c7b2
     name: gcc
-    evr: 8.5.0-22.el8_10
+    evr: 8.5.0-23.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/g/git-2.43.5-2.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-appstream-rpms
@@ -149,14 +149,14 @@ arches:
     size: 90528
     checksum: sha256:ef8c7d23f535e6a53d648e4682c353e303e2ddba8f8a196e2cf5b4a4b1b61aad
     name: glibc-devel
-    evr: 2.28-251.el8_10.11
+    evr: 2.28-251.el8_10.13
     sourcerpm: glibc-2.28-251.el8_10.11.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/g/glibc-headers-2.28-251.el8_10.11.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
     size: 505244
     checksum: sha256:c04559292c16f5101e5634183eba27dc763da5b895536357bb23a8035d013e15
     name: glibc-headers
-    evr: 2.28-251.el8_10.11
+    evr: 2.28-251.el8_10.13
     sourcerpm: glibc-2.28-251.el8_10.11.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/g/groff-base-1.22.3-18.el8.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
@@ -170,7 +170,7 @@ arches:
     size: 12399612
     checksum: sha256:0bc0963aafe2bae489e0677f4d3715e43a17bb95db11989911f2beafae3eb6fb
     name: kernel-headers
-    evr: 4.18.0-553.37.1.el8_10
+    evr: 4.18.0-553.40.1.el8_10
     sourcerpm: kernel-4.18.0-553.37.1.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/keyutils-libs-devel-1.5.10-9.el8.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
@@ -212,7 +212,7 @@ arches:
     size: 213196
     checksum: sha256:87e721009e53e5f1b1d6c1ff2f3c1cc07a68dd43e896cfda1e96cd49949145be
     name: libgomp
-    evr: 8.5.0-22.el8_10
+    evr: 8.5.0-23.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libkadm5-1.18.2-30.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
