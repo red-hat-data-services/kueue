@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi8/go-toolset:1.22@sha256:c7ebff72ffae334ad1b90b59189ac1ee21ad175f2014ddcb8563511350a0b23f AS builder
+FROM registry.access.redhat.com/ubi8/go-toolset:1.22@sha256:2c24146089ae08585578937ffa6ef7947ff7dabc416791b0658c91ab3cb4cf45 AS builder
 
 WORKDIR /workspace
 
@@ -15,7 +15,7 @@ COPY . .
 # Build
 RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
 
-FROM registry.redhat.io/ubi8/ubi-minimal@sha256:c38cc770631788157f8ea989df65ff30359c9f8af3246fef244b32caed9d5862 AS runtime
+FROM registry.redhat.io/ubi8/ubi-minimal@sha256:3544399c893a7f32d16220d22d493ae32e61379668e32bc54a74d8eb6ece80fc AS runtime
 
 ## Build args to be used at this step
 ARG USER=65532
