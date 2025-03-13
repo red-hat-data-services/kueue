@@ -5,28 +5,28 @@ arches:
 - arch: x86_64
   packages:
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/c/cpp-8.5.0-22.el8_10.x86_64.rpm
-    repoid: ubi-8-for-x86_64-appstream-rpms
+    repoid: ubi-8-appstream-rpms
     size: 10923404
     checksum: sha256:8376018e552fa4544c3d10af14be5a80c962494aae4dd538848b9546ef392a98
     name: cpp
     evr: 8.5.0-23.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/g/gcc-8.5.0-22.el8_10.x86_64.rpm
-    repoid: ubi-8-for-x86_64-appstream-rpms
+    repoid: ubi-8-appstream-rpms
     size: 24572708
     checksum: sha256:4d283a39969e559c70a93e26d9393e6ec0db39399595deec995f21e277c4c7b2
     name: gcc
     evr: 8.5.0-23.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/i/isl-0.16.1-6.el8.x86_64.rpm
-    repoid: ubi-8-for-x86_64-appstream-rpms
+    repoid: ubi-8-appstream-rpms
     size: 861300
     checksum: sha256:67e906b7bf52efc411fcf86568a90d6bf580242a7dc2b2fff813f0864492c7ea
     name: isl
     evr: 0.16.1-6.el8
     sourcerpm: isl-0.16.1-6.el8.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/l/libmpc-1.1.0-9.1.el8.x86_64.rpm
-    repoid: ubi-8-for-x86_64-appstream-rpms
+    repoid: ubi-8-appstream-rpms
     size: 62440
     checksum: sha256:230146e73dbaa1a259c2d8f1fbb10026c1726ebf2f14ef7e7e7957eb27b97ae9
     name: libmpc
