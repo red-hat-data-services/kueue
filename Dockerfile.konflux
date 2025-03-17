@@ -1,6 +1,6 @@
-FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:1.23.2@sha256:ca0c771ecd4f606986253f747e2773fe2960a6b5e8e7a52f6a4797b173ac7f56 AS golang
+FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:rhel_9_golang_1.23@sha256:4805e1cb2d1bd9d3c5de5d6986056bbda94ca7b01642f721d83d26579d333c60 AS golang
 
-FROM registry.redhat.io/ubi8/ubi:latest AS builder
+FROM registry.access.redhat.com/ubi9/ubi:latest@sha256:b88227436597e960f70db8eadcaf18ffa5b6d1a615888f709dcae3fba1540c61 AS builder
 ARG GOLANG_VERSION=1.23.2
 
 # Install system dependencies
@@ -8,6 +8,7 @@ RUN dnf upgrade -y && dnf install -y \
     gcc \
     make \
     openssl-devel \
+    krb5-devel \
     git \
     && dnf clean all && rm -rf /var/cache/yum
 
@@ -30,9 +31,9 @@ COPY go.sum go.sum
 COPY . .
 
 # Build
-RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
+RUN    CGO_ENABLED=1    GOEXPERIMENT=strictfipsruntime    go build  -tags strictfipsruntime -o bin/manager cmd/kueue/main.go
 
-FROM registry.redhat.io/ubi8/ubi-minimal@sha256:3544399c893a7f32d16220d22d493ae32e61379668e32bc54a74d8eb6ece80fc AS runtime
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:30bbd445046a3a63f5f5557a3c67dee74e3c8e7855eb0347630b020f3689823f AS runtime
 
 ## Build args to be used at this step
 ARG USER=65532
