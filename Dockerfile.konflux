@@ -1,6 +1,6 @@
 FROM registry.redhat.io/ubi8/go-toolset:1.21@sha256:742ae6ec1aef3e7faae488c47695fb64964d342aefecf52d23bd9d5e6731d0b6 AS golang
 
-FROM registry.redhat.io/ubi8/ubi@sha256:78c110b6dbea29a1621fd1578e04e863bbc09aa86ebc7dc4541d2288b4537ef2 AS builder
+FROM registry.redhat.io/ubi8/ubi@sha256:8bd1b6306f8164de7fb0974031a0f903bd3ab3e6bcab835854d3d9a1a74ea5db AS builder
 
 ARG GOLANG_VERSION=1.21.6
 
@@ -31,7 +31,7 @@ USER root
 RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux GOARCH=amd64'
 
 
-FROM registry.redhat.io/ubi8/ubi-minimal@sha256:e4ca1025efad7cc944fb991c716067b12e25ecbe05e6e81715a337179e417aa8 AS runtime
+FROM registry.redhat.io/ubi8/ubi-minimal@sha256:33161cf5ec11ea13bfe60cad64f56a3aa4d893852e8ec44b2fd2a6b40cc38539 AS runtime
 
 ## Build args to be used at this step
 ARG USER=65532
