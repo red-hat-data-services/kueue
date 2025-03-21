@@ -1,4 +1,4 @@
-# Prometheus Pod Monitor (Metrics)
+# Prometheus Service Monitor (Metrics)
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
