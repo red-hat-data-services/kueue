@@ -9,14 +9,14 @@ arches:
     size: 10923404
     checksum: sha256:8376018e552fa4544c3d10af14be5a80c962494aae4dd538848b9546ef392a98
     name: cpp
-    evr: 8.5.0-23.el8_10
+    evr: 8.5.0-24.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/g/gcc-8.5.0-22.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-appstream-rpms
     size: 24572708
     checksum: sha256:4d283a39969e559c70a93e26d9393e6ec0db39399595deec995f21e277c4c7b2
     name: gcc
-    evr: 8.5.0-23.el8_10
+    evr: 8.5.0-24.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/appstream/os/Packages/g/git-2.43.5-2.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-appstream-rpms
@@ -142,21 +142,21 @@ arches:
     size: 72144
     checksum: sha256:83f842706ba2a5e028183cea592e4666d031f33e040b560e10a957e71988112b
     name: emacs-filesystem
-    evr: 1:26.1-12.el8_10
+    evr: 1:26.1-13.el8_10
     sourcerpm: emacs-26.1-12.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/g/glibc-devel-2.28-251.el8_10.11.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
     size: 90528
     checksum: sha256:ef8c7d23f535e6a53d648e4682c353e303e2ddba8f8a196e2cf5b4a4b1b61aad
     name: glibc-devel
-    evr: 2.28-251.el8_10.13
+    evr: 2.28-251.el8_10.14
     sourcerpm: glibc-2.28-251.el8_10.11.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/g/glibc-headers-2.28-251.el8_10.11.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
     size: 505244
     checksum: sha256:c04559292c16f5101e5634183eba27dc763da5b895536357bb23a8035d013e15
     name: glibc-headers
-    evr: 2.28-251.el8_10.13
+    evr: 2.28-251.el8_10.14
     sourcerpm: glibc-2.28-251.el8_10.11.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/g/groff-base-1.22.3-18.el8.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
@@ -170,7 +170,7 @@ arches:
     size: 12399612
     checksum: sha256:0bc0963aafe2bae489e0677f4d3715e43a17bb95db11989911f2beafae3eb6fb
     name: kernel-headers
-    evr: 4.18.0-553.40.1.el8_10
+    evr: 4.18.0-553.44.1.el8_10
     sourcerpm: kernel-4.18.0-553.37.1.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/k/keyutils-libs-devel-1.5.10-9.el8.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
@@ -184,7 +184,7 @@ arches:
     size: 576216
     checksum: sha256:ee3da20c7fc382085b221afcef0d7d3fc5d865e23b1d275bc66049445121813c
     name: krb5-devel
-    evr: 1.18.2-30.el8_10
+    evr: 1.18.2-31.el8_10
     sourcerpm: krb5-1.18.2-30.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/less-530-3.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
@@ -212,14 +212,14 @@ arches:
     size: 213196
     checksum: sha256:87e721009e53e5f1b1d6c1ff2f3c1cc07a68dd43e896cfda1e96cd49949145be
     name: libgomp
-    evr: 8.5.0-23.el8_10
+    evr: 8.5.0-24.el8_10
     sourcerpm: gcc-8.5.0-22.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libkadm5-1.18.2-30.el8_10.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
     size: 193156
     checksum: sha256:9ed4bdba1758223305a89f39cd742ec63c273bd70673f3752b1d5a359905c371
     name: libkadm5
-    evr: 1.18.2-30.el8_10
+    evr: 1.18.2-31.el8_10
     sourcerpm: krb5-1.18.2-30.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libpkgconf-1.4.2-1.el8.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
@@ -233,7 +233,7 @@ arches:
     size: 205124
     checksum: sha256:2c7837dd3a883f7ba0506d06e9e33dee274718d058e0cf2b7d3728af45eb893e
     name: libselinux-devel
-    evr: 2.9-9.el8_10
+    evr: 2.9-10.el8_10
     sourcerpm: libselinux-2.9-9.el8_10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi8/8/x86_64/baseos/os/Packages/l/libsepol-devel-2.9-3.el8.x86_64.rpm
     repoid: ubi-8-for-x86_64-baseos-rpms
