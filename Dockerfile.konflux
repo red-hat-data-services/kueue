@@ -1,22 +1,4 @@
-FROM registry.access.redhat.com/ubi9/go-toolset:1.23@sha256:8a634d63713a073d7a1e086a322e57b148eef9620834fc8266df63d9294dff1b AS golang
-
-FROM registry.access.redhat.com/ubi9/ubi:latest@sha256:ea57285741f007e83f2ee20423c20b0cbcce0b59cc3da027c671692cc7efe4dd AS builder
-ARG GOLANG_VERSION=1.23.2
-
-# Install system dependencies
-RUN dnf upgrade -y && dnf install -y \
-    gcc \
-    make \
-    openssl-devel \
-    krb5-devel \
-    git \
-    && dnf clean all && rm -rf /var/cache/yum
-
-# Install Go
-ENV PATH=/usr/local/go/bin:$PATH
-
-COPY --from=golang /usr/lib/golang /usr/local/go
-# End of Go versioning workaround
+FROM registry.access.redhat.com/ubi9/go-toolset:1.23@sha256:8a634d63713a073d7a1e086a322e57b148eef9620834fc8266df63d9294dff1b AS builder
 
 WORKDIR /workspace
 

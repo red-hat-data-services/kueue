@@ -1,9 +1,0 @@
-contentOrigin:
-  repofiles:
-    - ubi.repo
-packages:
-  - gcc
-  - git
-  - krb5-devel
-  - make
-  - openssl-devel
