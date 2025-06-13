@@ -1,11 +1,11 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-	http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +18,7 @@ package resources
 
 import (
 	"maps"
+	"math"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -43,9 +44,27 @@ func (r Requests) Clone() Requests {
 	return maps.Clone(r)
 }
 
+func (r Requests) ScaledUp(f int64) Requests {
+	ret := r.Clone()
+	ret.Mul(f)
+	return ret
+}
+
+func (r Requests) ScaledDown(f int64) Requests {
+	ret := r.Clone()
+	ret.Divide(f)
+	return ret
+}
+
 func (r Requests) Divide(f int64) {
 	for k := range r {
 		r[k] /= f
+	}
+}
+
+func (r Requests) Mul(f int64) {
+	for k := range r {
+		r[k] *= f
 	}
 }
 
@@ -101,11 +120,16 @@ func (req Requests) CountIn(capacity Requests) int32 {
 	var result *int32
 	for rName, rValue := range req {
 		capacity, found := capacity[rName]
-		if !found {
+		if !found && rValue != 0 {
 			return 0
 		}
 		// find the minimum count matching all the resource quota.
-		count := int32(capacity / rValue)
+		var count int32
+		if rValue == 0 {
+			count = int32(math.MaxInt32)
+		} else {
+			count = int32(capacity / rValue)
+		}
 		if result == nil || count < *result {
 			result = ptr.To(count)
 		}
