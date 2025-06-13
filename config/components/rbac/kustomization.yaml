@@ -29,8 +29,12 @@ resources:
 - resourceflavor_viewer_role.yaml
 - pending_workloads_cq_viewer_role.yaml
 - pending_workloads_lq_viewer_role.yaml
+- topology_editor_role.yaml
+- topology_viewer_role.yaml
 - workload_editor_role.yaml
 - workload_viewer_role.yaml
+- cohort_editor_role.yaml
+- cohort_viewer_role.yaml
 
 # ClusterRoles for Kueue integrations
 - job_editor_role.yaml
@@ -39,8 +43,6 @@ resources:
 - jobset_viewer_role.yaml
 - mpijob_editor_role.yaml
 - mpijob_viewer_role.yaml
-- mxjob_editor_role.yaml
-- mxjob_viewer_role.yaml
 - raycluster_editor_role.yaml
 - raycluster_viewer_role.yaml
 - rayjob_editor_role.yaml

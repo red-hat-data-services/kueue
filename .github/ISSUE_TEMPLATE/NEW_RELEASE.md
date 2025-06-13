@@ -40,28 +40,29 @@ Please do not remove items from the checklist
       to generate the artifacts in the `artifacts` folder.
   - [ ] Upload the files in the `artifacts` folder to the draft release - either
       via UI or `gh release --repo kubernetes-sigs/kueue upload <tag> artifacts/*`.
-- [ ] Submit a PR against [k8s.io](https://github.com/kubernetes/k8s.io),
-      updating `registry.k8s.io/images/k8s-staging-kueue/images.yaml` to
-      [promote the container images](https://github.com/kubernetes/k8s.io/tree/main/registry.k8s.io#image-promoter)
-      to production: <!-- example kubernetes/k8s.io#3612-->
+- [ ] Submit a PR against [k8s.io](https://github.com/kubernetes/k8s.io) to 
+      [promote the container images and Helm Chart](https://github.com/kubernetes/k8s.io/tree/main/registry.k8s.io#image-promoter)
+      to production: <!-- example kubernetes/k8s.io#3612 and kubernetes/k8s.io#7817 -->
+  - [ ] Update `registry.k8s.io/images/k8s-staging-kueue/images.yaml`.
+  - [ ] Update `registry.k8s.io/images/charts/images.yaml`.
 - [ ] Wait for the PR to be merged and verify that the image `registry.k8s.io/kueue/kueue:$VERSION` is available.
 - [ ] Publish the draft release prepared at the [GitHub releases page](https://github.com/kubernetes-sigs/kueue/releases).
       Link: <!-- example https://github.com/kubernetes-sigs/kueue/releases/tag/v0.1.0 -->
 - [ ] Run the [openvex action](https://github.com/kubernetes-sigs/kueue/actions/workflows/openvex.yaml) to generate openvex data. The action will add the file to the release artifacts.
+- [ ] Run the [SBOM action](https://github.com/kubernetes-sigs/kueue/actions/workflows/sbom.yaml) to generate the SBOM and add it to the release.
 - [ ] Update the `main` branch :
   - [ ] Update `RELEASE_VERSION` in `Makefile` and run `make prepare-release-branch`
   - [ ] Release notes in the `CHANGELOG`
   - [ ] `SECURITY-INSIGHTS.yaml` values by running `make update-security-insights GIT_TAG=$VERSION`
   - [ ] Submit a pull request with the changes: <!-- example #3007 -->
   - [ ] Cherry-pick the pull request onto the `website` branch
-- [ ] Run the [SBOM action](https://github.com/kubernetes-sigs/kueue/actions/workflows/sbom.yaml) to generate the SBOM and add it to the release.
 - [ ] For major or minor releases, merge the `main` branch into the `website` branch to publish the updated documentation.
 - [ ] Send an announcement email to `sig-scheduling@kubernetes.io` and `wg-batch@kubernetes.io` with the subject `[ANNOUNCE] kueue $VERSION is released`.   <!--Link: example https://groups.google.com/a/kubernetes.io/g/wg-batch/c/-gZOrSnwDV4 -->
 - [ ] For a major or minor release, prepare the repo for the next version:
   - [ ] Create an unannotated _devel_ tag in the
         `main` branch, on the first commit that gets merged after the release
          branch has been created (presumably the README update commit above), and, push the tag:
-        `DEVEL=v0.$(($MAJ+1)).0-devel; git tag $DEVEL main && git push $DEVEL`
+        `DEVEL=v$MAJ.$(($MIN+1)).0-devel; git tag $DEVEL main && git push $DEVEL`
         This ensures that the devel builds on the `main` branch will have a meaningful version number.
   - [ ] Create a milestone for the next minor release and update prow to set it automatically for new PRs:
         <!-- example https://github.com/kubernetes/test-infra/pull/30222 -->

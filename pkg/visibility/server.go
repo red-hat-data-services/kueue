@@ -1,5 +1,5 @@
 /*
-Copyright 2023 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,11 +24,14 @@ import (
 	"strings"
 
 	validatingadmissionpolicy "k8s.io/apiserver/pkg/admission/plugin/policy/validating"
+	"k8s.io/apiserver/pkg/admission/plugin/resourcequota"
+	mutatingwebhook "k8s.io/apiserver/pkg/admission/plugin/webhook/mutating"
+	validatingwebhook "k8s.io/apiserver/pkg/admission/plugin/webhook/validating"
 	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
-	utilversion "k8s.io/apiserver/pkg/util/version"
 	"k8s.io/client-go/pkg/version"
+	utilversion "k8s.io/component-base/version"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	generatedopenapi "sigs.k8s.io/kueue/apis/visibility/openapi"
@@ -41,6 +44,14 @@ import (
 
 var (
 	setupLog = ctrl.Log.WithName("visibility-server")
+	// Admission plugins that are enabled by default in the kubeapi server
+	// but are not required for the visibility server.
+	disabledPlugins = []string{
+		validatingadmissionpolicy.PluginName,
+		resourcequota.PluginName,
+		validatingwebhook.PluginName,
+		mutatingwebhook.PluginName,
+	}
 )
 
 // +kubebuilder:rbac:groups=flowcontrol.apiserver.k8s.io,resources=prioritylevelconfigurations,verbs=list;watch
@@ -78,7 +89,7 @@ func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig) er
 	o.SecureServing.BindPort = 8082
 	// The directory where TLS certs will be created
 	o.SecureServing.ServerCert.CertDirectory = "/tmp"
-	o.Admission.DisablePlugins = []string{validatingadmissionpolicy.PluginName}
+	o.Admission.DisablePlugins = disabledPlugins
 	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", nil, []net.IP{net.ParseIP("127.0.0.1")}); err != nil {
 		return fmt.Errorf("error creating self-signed certificates: %v", err)
 	}

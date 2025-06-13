@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,11 +17,14 @@ limitations under the License.
 package e2e
 
 import (
+	"time"
+
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -43,21 +46,17 @@ var _ = ginkgo.Describe("Kueue", func() {
 	var jobKey types.NamespacedName
 
 	ginkgo.BeforeEach(func() {
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				GenerateName: "e2e-",
-			},
-		}
-		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
+		ns = util.CreateNamespaceFromPrefixWithLog(ctx, k8sClient, "e2e-")
 		sampleJob = testingjob.MakeJob("test-job", ns.Name).
 			Queue("main").
-			Request("cpu", "1").
-			Request("memory", "20Mi").
+			RequestAndLimit("cpu", "1").
+			RequestAndLimit("memory", "20Mi").
 			Obj()
 		jobKey = client.ObjectKeyFromObject(sampleJob)
 	})
 	ginkgo.AfterEach(func() {
 		gomega.Expect(util.DeleteNamespace(ctx, k8sClient, ns)).To(gomega.Succeed())
+		util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 	})
 
 	ginkgo.When("Creating a Job without a matching LocalQueue", func() {
@@ -120,17 +119,97 @@ var _ = ginkgo.Describe("Kueue", func() {
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, onDemandRF, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, spotRF, true)
+			util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
+		})
+
+		ginkgo.It("Should allow to schedule Jobs via CronJob", func() {
+			cronJob := &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-cronjob",
+					Namespace: ns.Name,
+				},
+				Spec: batchv1.CronJobSpec{
+					Schedule:          "* * * * *",
+					ConcurrencyPolicy: batchv1.ForbidConcurrent,
+					JobTemplate: batchv1.JobTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								constants.QueueLabel: localQueue.Name,
+							},
+						},
+						Spec: batchv1.JobSpec{
+							Template: corev1.PodTemplateSpec{
+								Spec: corev1.PodSpec{
+									RestartPolicy: corev1.RestartPolicyNever,
+									Containers: []corev1.Container{
+										{
+											Name:    "c",
+											Image:   util.E2eTestAgnHostImage,
+											Command: util.BehaviorExitFast,
+											Resources: corev1.ResourceRequirements{
+												Requests: corev1.ResourceList{
+													corev1.ResourceCPU: resource.MustParse("1"),
+												},
+												Limits: corev1.ResourceList{
+													corev1.ResourceCPU: resource.MustParse("1"),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			gomega.Expect(k8sClient.Create(ctx, cronJob)).Should(gomega.Succeed())
+			ginkgo.DeferCleanup(func() {
+				gomega.Expect(util.DeleteAllCronJobsInNamespace(ctx, k8sClient, ns)).Should(gomega.Succeed())
+			})
+
+			ginkgo.By("Patch the last start time to be in the past so that it starts immediately", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cronJob), cronJob)).To(gomega.Succeed())
+					nextSchedule := cronJob.CreationTimestamp.Add(-2 * time.Minute)
+					cronJob.Status.LastScheduleTime = ptr.To(metav1.Time{Time: nextSchedule})
+					g.Expect(k8sClient.Status().Update(ctx, cronJob)).Should(gomega.Succeed())
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			createJobs := &batchv1.JobList{}
+			ginkgo.By("Check that the Job is create and retrieve it", func() {
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.List(ctx, createJobs, client.InNamespace(ns.Name))).To(gomega.Succeed())
+					g.Expect(createJobs.Items).To(gomega.HaveLen(1))
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+			})
+
+			createdJob := createJobs.Items[0]
+			ginkgo.By("verify the job has the nodeSelector assigned", func() {
+				jobKey := client.ObjectKeyFromObject(&createdJob)
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
+					"instance-type": "on-demand",
+				})
+			})
+			ginkgo.By("verify the workload was created and admitted for the Job", func() {
+				createdWorkload := &kueue.Workload{}
+				wlLookupKey := types.NamespacedName{Name: workloadjob.GetWorkloadNameForJob(createdJob.Name, createdJob.UID), Namespace: ns.Name}
+				gomega.Eventually(func(g gomega.Gomega) {
+					g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
+					g.Expect(workload.HasQuotaReservation(createdWorkload)).Should(gomega.BeTrue())
+				}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+			})
 		})
 
 		ginkgo.It("Should unsuspend a job and set nodeSelectors", func() {
 			// Use a binary that ends.
-			sampleJob = (&testingjob.JobWrapper{Job: *sampleJob}).Image(util.E2eTestSleepImage, []string{"1ms"}).Obj()
+			sampleJob = (&testingjob.JobWrapper{Job: *sampleJob}).Image(util.E2eTestAgnHostImage, util.BehaviorExitFast).Obj()
 			gomega.Expect(k8sClient.Create(ctx, sampleJob)).Should(gomega.Succeed())
 
 			createdWorkload := &kueue.Workload{}
 
 			// The job might have finished at this point. That shouldn't be a problem for the purpose of this test
-			expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+			util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 				"instance-type": "on-demand",
 			})
 			wlLookupKey := types.NamespacedName{Name: workloadjob.GetWorkloadNameForJob(sampleJob.Name, sampleJob.UID), Namespace: ns.Name}
@@ -147,7 +226,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 				sampleJob = (&testingjob.JobWrapper{Job: *sampleJob}).
 					Label(constants.PrebuiltWorkloadLabel, "prebuilt-wl").
 					BackoffLimit(0).
-					Image(util.E2eTestSleepImage, []string{"-termination-code=1", "10m"}).
+					Image(util.E2eTestAgnHostImage, util.BehaviorWaitForDeletionFailOnExit).
 					TerminationGracePeriod(1).
 					Obj()
 				testingjob.SetContainerDefaults(&sampleJob.Spec.Template.Spec.Containers[0])
@@ -156,7 +235,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 					Finalizers(kueue.ResourceInUseFinalizerName).
 					Queue(localQueue.Name).
 					PodSets(
-						*testing.MakePodSet("main", 1).Containers(sampleJob.Spec.Template.Spec.Containers[0]).Obj(),
+						*testing.MakePodSet(kueue.DefaultPodSetName, 1).Containers(sampleJob.Spec.Template.Spec.Containers[0]).Obj(),
 					).
 					Obj()
 				gomega.Expect(k8sClient.Create(ctx, wl)).Should(gomega.Succeed())
@@ -182,7 +261,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 			})
 
 			ginkgo.By("Verify the job is running", func() {
-				expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 					"instance-type": "on-demand",
 				})
 			})
@@ -223,7 +302,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 			})
 
 			ginkgo.By("Job is admitted using the first flavor", func() {
-				expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 					"instance-type": "on-demand",
 				})
 			})
@@ -232,18 +311,18 @@ var _ = ginkgo.Describe("Kueue", func() {
 				job := testingjob.MakeJob("high", ns.Name).
 					Queue("main").
 					PriorityClass("high").
-					Request(corev1.ResourceCPU, "1").
+					RequestAndLimit(corev1.ResourceCPU, "1").
 					NodeSelector("instance-type", "on-demand"). // target the same flavor to cause preemption
 					Obj()
 				gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
 
-				expectJobUnsuspendedWithNodeSelectors(client.ObjectKeyFromObject(job), map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, client.ObjectKeyFromObject(job), map[string]string{
 					"instance-type": "on-demand",
 				})
 			})
 
 			ginkgo.By("Job is re-admitted using the second flavor", func() {
-				expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 					"instance-type": "spot",
 				})
 			})
@@ -259,7 +338,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 			})
 
 			ginkgo.By("Job is admitted using the first flavor", func() {
-				expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 					"instance-type": "on-demand",
 				})
 			})
@@ -268,18 +347,18 @@ var _ = ginkgo.Describe("Kueue", func() {
 				job := testingjob.MakeJob("high-with-wpc", ns.Name).
 					Queue("main").
 					WorkloadPriorityClass("high-workload").
-					Request(corev1.ResourceCPU, "1").
+					RequestAndLimit(corev1.ResourceCPU, "1").
 					NodeSelector("instance-type", "on-demand"). // target the same flavor to cause preemption
 					Obj()
 				gomega.Expect(k8sClient.Create(ctx, job)).Should(gomega.Succeed())
 
-				expectJobUnsuspendedWithNodeSelectors(client.ObjectKeyFromObject(job), map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, client.ObjectKeyFromObject(job), map[string]string{
 					"instance-type": "on-demand",
 				})
 			})
 
 			ginkgo.By("Job is re-admitted using the second flavor", func() {
-				expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 					"instance-type": "spot",
 				})
 			})
@@ -288,8 +367,8 @@ var _ = ginkgo.Describe("Kueue", func() {
 			// Use a binary that ends.
 			job := testingjob.MakeJob("job", ns.Name).
 				Queue("main").
-				Image(util.E2eTestSleepImage, []string{"1ms"}).
-				Request("cpu", "500m").
+				Image(util.E2eTestAgnHostImage, util.BehaviorExitFast).
+				RequestAndLimit("cpu", "500m").
 				Parallelism(3).
 				Completions(4).
 				SetAnnotation(workloadjob.JobMinParallelismAnnotation, "1").
@@ -299,7 +378,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 			// The job might have finished at this point. That shouldn't be a problem for the purpose of this test
 			ginkgo.By("Wait for the job to start and check the updated Parallelism and Completions", func() {
 				jobKey := client.ObjectKeyFromObject(job)
-				expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+				util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 					"instance-type": "on-demand",
 				})
 
@@ -358,11 +437,12 @@ var _ = ginkgo.Describe("Kueue", func() {
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, clusterQueue, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, onDemandRF, true)
 			util.ExpectObjectToBeDeleted(ctx, k8sClient, check, true)
+			util.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 		})
 
 		ginkgo.It("Should unsuspend a job only after all checks are cleared", func() {
 			// Use a binary that ends.
-			sampleJob = (&testingjob.JobWrapper{Job: *sampleJob}).Image(util.E2eTestSleepImage, []string{"1ms"}).Obj()
+			sampleJob = (&testingjob.JobWrapper{Job: *sampleJob}).Image(util.E2eTestAgnHostImage, util.BehaviorExitFast).Obj()
 			gomega.Expect(k8sClient.Create(ctx, sampleJob)).Should(gomega.Succeed())
 
 			createdWorkload := &kueue.Workload{}
@@ -400,13 +480,13 @@ var _ = ginkgo.Describe("Kueue", func() {
 					workload.SetAdmissionCheckState(&patch.Status.AdmissionChecks, kueue.AdmissionCheckState{
 						Name:  "check1",
 						State: kueue.CheckStateReady,
-					})
+					}, realClock)
 					g.Expect(k8sClient.Status().Patch(ctx, patch, client.Apply, client.FieldOwner("test-admission-check-controller"), client.ForceOwnership)).Should(gomega.Succeed())
 				}, util.Timeout, util.Interval).Should(gomega.Succeed())
 			})
 
 			// The job might have finished at this point. That shouldn't be a problem for the purpose of this test
-			expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+			util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 				"instance-type": "on-demand",
 			})
 			gomega.Eventually(func(g gomega.Gomega) {
@@ -438,12 +518,12 @@ var _ = ginkgo.Describe("Kueue", func() {
 					workload.SetAdmissionCheckState(&patch.Status.AdmissionChecks, kueue.AdmissionCheckState{
 						Name:  "check1",
 						State: kueue.CheckStateReady,
-					})
+					}, realClock)
 					g.Expect(k8sClient.Status().Patch(ctx, patch, client.Apply, client.FieldOwner("test-admission-check-controller"), client.ForceOwnership)).Should(gomega.Succeed())
 				}, util.Timeout, util.Interval).Should(gomega.Succeed())
 			})
 
-			expectJobUnsuspendedWithNodeSelectors(jobKey, map[string]string{
+			util.ExpectJobUnsuspendedWithNodeSelectors(ctx, k8sClient, jobKey, map[string]string{
 				"instance-type": "on-demand",
 			})
 
@@ -454,7 +534,7 @@ var _ = ginkgo.Describe("Kueue", func() {
 					workload.SetAdmissionCheckState(&patch.Status.AdmissionChecks, kueue.AdmissionCheckState{
 						Name:  "check1",
 						State: kueue.CheckStateRejected,
-					})
+					}, realClock)
 					g.Expect(k8sClient.Status().Patch(ctx, patch, client.Apply,
 						client.FieldOwner("test-admission-check-controller"),
 						client.ForceOwnership)).Should(gomega.Succeed())
@@ -478,15 +558,6 @@ func expectJobUnsuspended(key types.NamespacedName) {
 	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
 		g.Expect(k8sClient.Get(ctx, key, job)).To(gomega.Succeed())
 		g.Expect(job.Spec.Suspend).Should(gomega.Equal(ptr.To(false)))
-	}, util.Timeout, util.Interval).Should(gomega.Succeed())
-}
-
-func expectJobUnsuspendedWithNodeSelectors(key types.NamespacedName, ns map[string]string) {
-	job := &batchv1.Job{}
-	gomega.EventuallyWithOffset(1, func(g gomega.Gomega) {
-		g.Expect(k8sClient.Get(ctx, key, job)).To(gomega.Succeed())
-		g.Expect(job.Spec.Suspend).Should(gomega.Equal(ptr.To(false)))
-		g.Expect(job.Spec.Template.Spec.NodeSelector).Should(gomega.Equal(ns))
 	}, util.Timeout, util.Interval).Should(gomega.Succeed())
 }
 

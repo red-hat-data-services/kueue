@@ -1,5 +1,5 @@
 /*
-Copyright 2023 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,23 +17,17 @@ limitations under the License.
 package cache
 
 import (
-	"context"
-	"fmt"
-	"math"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	tasindexer "sigs.k8s.io/kueue/pkg/controller/tas/indexer"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/metrics"
-	"sigs.k8s.io/kueue/pkg/resources"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
-	"sigs.k8s.io/kueue/pkg/workload"
 )
 
 func TestClusterQueueUpdateWithFlavors(t *testing.T) {
@@ -79,14 +73,15 @@ func TestClusterQueueUpdateWithFlavors(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
+			_, log := utiltesting.ContextWithLog(t)
 			cache := New(utiltesting.NewFakeClient())
-			cq, err := cache.newClusterQueue(cq)
+			cq, err := cache.newClusterQueue(log, cq)
 			if err != nil {
 				t.Fatalf("failed to new clusterQueue %v", err)
 			}
 
 			cq.Status = tc.curStatus
-			cq.UpdateWithFlavors(tc.flavors)
+			cq.UpdateWithFlavors(log, tc.flavors)
 
 			if cq.Status != tc.wantStatus {
 				t.Fatalf("got different status, want: %v, got: %v", tc.wantStatus, cq.Status)
@@ -151,22 +146,22 @@ func TestClusterQueueUpdate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 			clientBuilder := utiltesting.NewClientBuilder().
 				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+					utiltesting.MakeNamespace("default"),
 					tc.cq,
 				)
 			cl := clientBuilder.Build()
 			cqCache := New(cl)
 			// Workloads are loaded into queues or clusterQueues as we add them.
 			for _, rf := range resourceFlavors {
-				cqCache.AddOrUpdateResourceFlavor(rf)
+				cqCache.AddOrUpdateResourceFlavor(log, rf)
 			}
 			if err := cqCache.AddClusterQueue(ctx, tc.cq); err != nil {
 				t.Fatalf("Inserting clusterQueue %s in cache: %v", tc.cq.Name, err)
 			}
-			if err := cqCache.UpdateClusterQueue(tc.newcq); err != nil {
+			if err := cqCache.UpdateClusterQueue(log, tc.newcq); err != nil {
 				t.Fatalf("Updating clusterQueue %s in cache: %v", tc.newcq.Name, err)
 			}
 			snapshot, err := cqCache.Snapshot(ctx)
@@ -175,7 +170,7 @@ func TestClusterQueueUpdate(t *testing.T) {
 			}
 			if diff := cmp.Diff(
 				tc.wantLastAssignmentGeneration,
-				snapshot.ClusterQueues["eng-alpha"].AllocatableResourceGeneration); diff != "" {
+				snapshot.ClusterQueue("eng-alpha").AllocatableResourceGeneration); diff != "" {
 				t.Errorf("Unexpected assigned clusterQueues in cache (-want,+got):\n%s", diff)
 			}
 		})
@@ -586,8 +581,9 @@ func TestClusterQueueUpdateWithAdmissionCheck(t *testing.T) {
 			if tc.acValidationRulesEnabled {
 				features.SetFeatureGateDuringTest(t, features.AdmissionCheckValidationRules, true)
 			}
+			_, log := utiltesting.ContextWithLog(t)
 			cache := New(utiltesting.NewFakeClient())
-			cq, err := cache.newClusterQueue(tc.cq)
+			cq, err := cache.newClusterQueue(log, tc.cq)
 			if err != nil {
 				t.Fatalf("failed to new clusterQueue %v", err)
 			}
@@ -609,7 +605,7 @@ func TestClusterQueueUpdateWithAdmissionCheck(t *testing.T) {
 					cq.flavorIndependentAdmissionCheckAppliedPerFlavor = []string{"not-on-flavor"}
 				}
 			}
-			cq.updateWithAdmissionChecks(tc.admissionChecks)
+			cq.updateWithAdmissionChecks(log, tc.admissionChecks)
 
 			if cq.Status != tc.wantStatus {
 				t.Errorf("got different status, want: %v, got: %v", tc.wantStatus, cq.Status)
@@ -623,353 +619,6 @@ func TestClusterQueueUpdateWithAdmissionCheck(t *testing.T) {
 				t.Errorf("Unexpected inactiveMessage (-want,+got):\n%s", diff)
 			}
 		})
-	}
-}
-
-func TestDominantResourceShare(t *testing.T) {
-	cases := map[string]struct {
-		usage               resources.FlavorResourceQuantities
-		clusterQueue        *kueue.ClusterQueue
-		lendingClusterQueue *kueue.ClusterQueue
-		flvResQ             resources.FlavorResourceQuantities
-		wantDRValue         int
-		wantDRName          corev1.ResourceName
-	}{
-		"no cohort": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 1_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  2,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("2000").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-		},
-		"usage below nominal": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 1_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  2,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("2").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("8").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-		},
-		"usage above nominal": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 3_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  7,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("2").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("8").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			wantDRName:  "example.com/gpu",
-			wantDRValue: 200, // (7-5)*1000/10
-		},
-		"one resource above nominal": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 3_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  3,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("2").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("8").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			wantDRName:  corev1.ResourceCPU,
-			wantDRValue: 100, // (3-2)*1000/10
-		},
-		"usage with workload above nominal": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 1_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  2,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("2").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("8").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			flvResQ: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 4_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  4,
-			},
-			wantDRName:  corev1.ResourceCPU,
-			wantDRValue: 300, // (1+4-2)*1000/10
-		},
-		"A resource with zero lendable": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 1_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  1,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("2").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("2").LendingLimit("0").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("8").Append().
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("64").LendingLimit("0").Append().
-						FlavorQuotas,
-				).Obj(),
-			flvResQ: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: corev1.ResourceCPU}: 4_000,
-				{Flavor: "default", Resource: "example.com/gpu"}:  4,
-			},
-			wantDRName:  corev1.ResourceCPU,
-			wantDRValue: 300, // (1+4-2)*1000/10
-		},
-		"multiple flavors": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "on-demand", Resource: corev1.ResourceCPU}: 15_000,
-				{Flavor: "spot", Resource: corev1.ResourceCPU}:      5_000,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("on-demand").
-						ResourceQuotaWrapper("cpu").NominalQuota("20").Append().
-						FlavorQuotas,
-					utiltesting.MakeFlavorQuotas("spot").
-						ResourceQuotaWrapper("cpu").NominalQuota("80").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("cpu").NominalQuota("100").Append().
-						FlavorQuotas,
-				).Obj(),
-			flvResQ: resources.FlavorResourceQuantities{
-				{Flavor: "on-demand", Resource: corev1.ResourceCPU}: 10_000,
-			},
-			wantDRName:  corev1.ResourceCPU,
-			wantDRValue: 25, // ((15+10-20)+0)*1000/200 (spot under nominal)
-		},
-		"above nominal with integer weight": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: "example.com/gpu"}: 7,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(resource.MustParse("2")).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			wantDRName:  "example.com/gpu",
-			wantDRValue: 100, // ((7-5)*1000/10)/2
-		},
-		"above nominal with decimal weight": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: "example.com/gpu"}: 7,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(resource.MustParse("0.5")).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			wantDRName:  "example.com/gpu",
-			wantDRValue: 400, // ((7-5)*1000/10)/(1/2)
-		},
-		"above nominal with zero weight": {
-			usage: resources.FlavorResourceQuantities{
-				{Flavor: "default", Resource: "example.com/gpu"}: 7,
-			},
-			clusterQueue: utiltesting.MakeClusterQueue("cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				FairWeight(resource.MustParse("0")).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
-						FlavorQuotas,
-				).Obj(),
-			lendingClusterQueue: utiltesting.MakeClusterQueue("lending-cq").
-				Cohort("test-cohort").
-				FairWeight(oneQuantity).
-				ResourceGroup(
-					utiltesting.MakeFlavorQuotas("default").
-						ResourceQuotaWrapper("example.com/gpu").NominalQuota("10").Append().
-						FlavorQuotas,
-				).Obj(),
-			wantDRValue: math.MaxInt,
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			ctx, _ := utiltesting.ContextWithLog(t)
-			cache := New(utiltesting.NewFakeClient())
-			cache.AddOrUpdateResourceFlavor(utiltesting.MakeResourceFlavor("default").Obj())
-			cache.AddOrUpdateResourceFlavor(utiltesting.MakeResourceFlavor("on-demand").Obj())
-			cache.AddOrUpdateResourceFlavor(utiltesting.MakeResourceFlavor("spot").Obj())
-
-			_ = cache.AddClusterQueue(ctx, tc.clusterQueue)
-
-			if tc.lendingClusterQueue != nil {
-				// we create a second cluster queue to add lendable capacity to the cohort.
-				_ = cache.AddClusterQueue(ctx, tc.lendingClusterQueue)
-			}
-
-			snapshot, err := cache.Snapshot(ctx)
-			if err != nil {
-				t.Fatalf("unexpected error while building snapshot: %v", err)
-			}
-			i := 0
-			for fr, v := range tc.usage {
-				admission := utiltesting.MakeAdmission("cq")
-				quantity := resources.ResourceQuantity(fr.Resource, v)
-				admission.Assignment(fr.Resource, fr.Flavor, quantity.String())
-
-				wl := utiltesting.MakeWorkload(fmt.Sprintf("workload-%d", i), "default-namespace").ReserveQuota(admission.Obj()).Obj()
-
-				cache.AddOrUpdateWorkload(wl)
-				snapshot.AddWorkload(workload.NewInfo(wl))
-				i += 1
-			}
-
-			drVal, drNameCache := dominantResourceShare(cache.hm.ClusterQueues["cq"], tc.flvResQ, 1)
-			if drVal != tc.wantDRValue {
-				t.Errorf("cache.DominantResourceShare(_) returned value %d, want %d", drVal, tc.wantDRValue)
-			}
-			if drNameCache != tc.wantDRName {
-				t.Errorf("cache.DominantResourceShare(_) returned resource %s, want %s", drNameCache, tc.wantDRName)
-			}
-
-			drValSnap, drNameSnap := snapshot.ClusterQueues["cq"].DominantResourceShareWith(tc.flvResQ)
-			if drValSnap != tc.wantDRValue {
-				t.Errorf("snapshot.DominantResourceShare(_) returned value %d, want %d", drValSnap, tc.wantDRValue)
-			}
-			if drNameSnap != tc.wantDRName {
-				t.Errorf("snapshot.DominantResourceShare(_) returned resource %s, want %s", drNameSnap, tc.wantDRName)
-			}
-		})
-	}
-}
-
-func TestCohortLendable(t *testing.T) {
-	cache := New(utiltesting.NewFakeClient())
-
-	cq1 := utiltesting.MakeClusterQueue("cq1").
-		ResourceGroup(
-			utiltesting.MakeFlavorQuotas("default").
-				ResourceQuotaWrapper("cpu").NominalQuota("8").LendingLimit("8").Append().
-				ResourceQuotaWrapper("example.com/gpu").NominalQuota("3").LendingLimit("3").Append().
-				FlavorQuotas,
-		).Cohort("test-cohort").
-		ClusterQueue
-
-	cq2 := utiltesting.MakeClusterQueue("cq2").
-		ResourceGroup(
-			utiltesting.MakeFlavorQuotas("default").
-				ResourceQuotaWrapper("cpu").NominalQuota("2").LendingLimit("2").Append().
-				FlavorQuotas,
-		).Cohort("test-cohort").
-		ClusterQueue
-
-	if err := cache.AddClusterQueue(context.Background(), &cq1); err != nil {
-		t.Fatal("Failed to add CQ to cache", err)
-	}
-	if err := cache.AddClusterQueue(context.Background(), &cq2); err != nil {
-		t.Fatal("Failed to add CQ to cache", err)
-	}
-
-	wantLendable := map[corev1.ResourceName]int64{
-		corev1.ResourceCPU: 10_000,
-		"example.com/gpu":  3,
-	}
-
-	lendable := cache.hm.Cohorts["test-cohort"].resourceNode.calculateLendable()
-	if diff := cmp.Diff(wantLendable, lendable); diff != "" {
-		t.Errorf("Unexpected cohort lendable (-want,+got):\n%s", diff)
 	}
 }
 
@@ -1008,8 +657,8 @@ func TestClusterQueueReadinessWithTAS(t *testing.T) {
 						ResourceQuotaWrapper("example.com/gpu").NominalQuota("5").Append().
 						FlavorQuotas,
 				).Cohort("some-cohort").Obj(),
-			wantReason:  kueue.ClusterQueueActiveReasonNotSupportedWithTopologyAwareScheduling,
-			wantMessage: "Can't admit new workloads: TAS is not supported for cohorts.",
+			wantReason:  kueue.ClusterQueueActiveReasonReady,
+			wantMessage: "Can admit new workloads",
 		},
 		{
 			name: "TAS do not support Preemption",
@@ -1032,8 +681,8 @@ func TestClusterQueueReadinessWithTAS(t *testing.T) {
 					WhenCanPreempt: kueue.Preempt,
 				}).
 				Obj(),
-			wantReason:  kueue.ClusterQueueActiveReasonNotSupportedWithTopologyAwareScheduling,
-			wantMessage: "Can't admit new workloads: TAS is not supported for preemption within cluster queue.",
+			wantReason:  kueue.ClusterQueueActiveReasonReady,
+			wantMessage: "Can admit new workloads",
 		},
 		{
 			name: "TAS do not support MultiKueue AdmissionCheck",
@@ -1087,7 +736,7 @@ func TestClusterQueueReadinessWithTAS(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
 
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
 			clientBuilder := utiltesting.NewClientBuilder()
 			_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
@@ -1098,24 +747,24 @@ func TestClusterQueueReadinessWithTAS(t *testing.T) {
 			topology := utiltesting.MakeTopology("example-topology").Levels("tas-level-0").Obj()
 
 			rf := utiltesting.MakeResourceFlavor("tas-flavor").TopologyName(topology.Name).Obj()
-			cqCache.AddOrUpdateResourceFlavor(rf)
+			cqCache.AddOrUpdateResourceFlavor(log, rf)
 
 			if !tc.skipTopology {
-				cqCache.AddOrUpdateTopologyForFlavor(topology, rf)
+				cqCache.AddOrUpdateTopology(log, topology)
 			}
 
 			mkAC := utiltesting.MakeAdmissionCheck("mk-check").ControllerName(kueue.MultiKueueControllerName).Active(metav1.ConditionTrue).Obj()
-			cqCache.AddOrUpdateAdmissionCheck(mkAC)
+			cqCache.AddOrUpdateAdmissionCheck(log, mkAC)
 
 			acWithPR := utiltesting.MakeAdmissionCheck("pr-check").ControllerName(kueue.ProvisioningRequestControllerName).Active(metav1.ConditionTrue).Obj()
-			cqCache.AddOrUpdateAdmissionCheck(acWithPR)
+			cqCache.AddOrUpdateAdmissionCheck(log, acWithPR)
 
 			if err := cqCache.AddClusterQueue(ctx, tc.cq); err != nil {
 				t.Fatalf("Inserting clusterQueue %s in cache: %v", tc.cq.Name, err)
 			}
 
 			if tc.updatedCq != nil {
-				if err := cqCache.UpdateClusterQueue(tc.updatedCq); err != nil {
+				if err := cqCache.UpdateClusterQueue(log, tc.updatedCq); err != nil {
 					t.Fatalf("Updating clusterQueue %s in cache: %v", tc.updatedCq.Name, err)
 				}
 			}
@@ -1125,7 +774,7 @@ func TestClusterQueueReadinessWithTAS(t *testing.T) {
 				t.Fatalf("unexpected error while building snapshot: %v", err)
 			}
 
-			_, gotReason, gotMessage := cqCache.ClusterQueueReadiness(tc.cq.Name)
+			_, gotReason, gotMessage := cqCache.ClusterQueueReadiness(kueue.ClusterQueueReference(tc.cq.Name))
 			if diff := cmp.Diff(tc.wantReason, gotReason); diff != "" {
 				t.Errorf("Unexpected inactiveReason (-want,+got):\n%s", diff)
 			}

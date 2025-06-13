@@ -1,5 +1,5 @@
 /*
-Copyright 2023 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,11 +21,14 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	jobsetapi "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 	jobsetutil "sigs.k8s.io/jobset/pkg/util/testing"
 
 	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 // JobSetWrapper wraps a JobSet.
@@ -47,6 +50,7 @@ type ReplicatedJobRequirements struct {
 	Replicas       int32
 	Parallelism    int32
 	Completions    int32
+	Labels         map[string]string
 	Annotations    map[string]string
 	PodAnnotations map[string]string
 	Image          string
@@ -64,8 +68,8 @@ func (j *JobSetWrapper) Obj() *jobsetapi.JobSet {
 	return &j.JobSet
 }
 
-// DeepCopy returns a DeepCopy of j.
-func (j *JobSetWrapper) DeepCopy() *JobSetWrapper {
+// Clone returns a DeepCopy of j.
+func (j *JobSetWrapper) Clone() *JobSetWrapper {
 	return &JobSetWrapper{JobSet: *j.JobSet.DeepCopy()}
 }
 
@@ -74,6 +78,7 @@ func (j *JobSetWrapper) ReplicatedJobs(replicatedJobs ...ReplicatedJobRequiremen
 	j.Spec.ReplicatedJobs = make([]jobsetapi.ReplicatedJob, len(replicatedJobs))
 	for index, req := range replicatedJobs {
 		jt := jobsetutil.MakeJobTemplate("", "").PodSpec(TestPodSpec).Obj()
+		jt.Labels = req.Labels
 		jt.Annotations = req.Annotations
 		jt.Spec.Parallelism = ptr.To(req.Parallelism)
 		jt.Spec.Completions = ptr.To(req.Completions)
@@ -96,6 +101,11 @@ func (j *JobSetWrapper) ReplicatedJobs(replicatedJobs ...ReplicatedJobRequiremen
 	return j
 }
 
+func (j *JobSetWrapper) UID(uid string) *JobSetWrapper {
+	j.ObjectMeta.UID = types.UID(uid)
+	return j
+}
+
 // Suspend updates the suspend status of the JobSet.
 func (j *JobSetWrapper) Suspend(s bool) *JobSetWrapper {
 	j.Spec.Suspend = ptr.To(s)
@@ -114,6 +124,12 @@ func (j *JobSetWrapper) Label(k, v string) *JobSetWrapper {
 // Annotations sets annotations to the JobSet.
 func (j *JobSetWrapper) Annotations(annotations map[string]string) *JobSetWrapper {
 	j.ObjectMeta.Annotations = annotations
+	return j
+}
+
+func (j *JobSetWrapper) SetTypeMeta() *JobSetWrapper {
+	j.APIVersion = jobsetapi.SchemeGroupVersion.String()
+	j.Kind = "JobSet"
 	return j
 }
 
@@ -148,6 +164,11 @@ func (j *JobSetWrapper) Limit(replicatedJobName string, r corev1.ResourceName, v
 	return j
 }
 
+// RequestAndLimit adds a resource request and limit to the first container of the target replicatedJob.
+func (j *JobSetWrapper) RequestAndLimit(replicatedJobName string, r corev1.ResourceName, v string) *JobSetWrapper {
+	return j.Request(replicatedJobName, r, v).Limit(replicatedJobName, r, v)
+}
+
 // PriorityClass updates JobSet priorityclass.
 func (j *JobSetWrapper) PriorityClass(pc string) *JobSetWrapper {
 	for i := range j.Spec.ReplicatedJobs {
@@ -180,5 +201,11 @@ func (j *JobSetWrapper) Condition(c metav1.Condition) *JobSetWrapper {
 // ManagedBy adds a managedby.
 func (j *JobSetWrapper) ManagedBy(c string) *JobSetWrapper {
 	j.Spec.ManagedBy = &c
+	return j
+}
+
+// OwnerReference adds a ownerReference to the default container.
+func (j *JobSetWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersionKind) *JobSetWrapper {
+	testing.AppendOwnerReference(j, ownerGVK, ownerName, ownerName, ptr.To(true), nil)
 	return j
 }

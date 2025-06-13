@@ -1,5 +1,5 @@
 /*
-Copyright 2023 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,10 +18,12 @@ package jobs
 
 // Reference the job framework integration packages to ensure linking.
 import (
+	_ "sigs.k8s.io/kueue/pkg/controller/jobs/appwrapper"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/deployment"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/job"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/jobset"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/kubeflow/jobs"
+	_ "sigs.k8s.io/kueue/pkg/controller/jobs/leaderworkerset"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/mpijob"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/pod"
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/raycluster"

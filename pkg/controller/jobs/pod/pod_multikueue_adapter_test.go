@@ -1,11 +1,11 @@
 /*
-Copyright 2025 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-	http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,31 +40,42 @@ const (
 	TestNamespace = "ns"
 )
 
-func TestMultikueueAdapter(t *testing.T) {
-	objCheckOpts := []cmp.Option{
+func TestMultiKueueAdapter(t *testing.T) {
+	objCheckOpts := cmp.Options{
 		cmpopts.IgnoreFields(metav1.ObjectMeta{}, "ResourceVersion"),
 		cmpopts.EquateEmpty(),
 	}
 
-	basePodBuilder := utiltestingpod.MakePod("pod1", TestNamespace)
+	basePodName := "test-pod"
+	basePodBuilder := utiltestingpod.MakePod(basePodName, TestNamespace)
+
+	groupSize := 3
+	podGroup := basePodBuilder.
+		Clone().
+		MakePodGroupWrappers(groupSize)
+
+	podGroupWithWl := basePodBuilder.
+		Clone().
+		Label(constants.PrebuiltWorkloadLabel, "wl1").
+		Label(kueue.MultiKueueOriginLabel, "origin1").
+		MakePodGroupWrappers(groupSize)
 
 	cases := map[string]struct {
 		managersPods []corev1.Pod
 		workerPods   []corev1.Pod
 
-		operation func(ctx context.Context, adapter *multikueueAdapter, managerClient, workerClient client.Client) error
+		operation func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error
 
 		wantError        error
 		wantManagersPods []corev1.Pod
 		wantWorkerPods   []corev1.Pod
 	}{
-
 		"sync creates missing remote pod": {
 			managersPods: []corev1.Pod{
 				*basePodBuilder.Clone().Obj(),
 			},
-			operation: func(ctx context.Context, adapter *multikueueAdapter, managerClient, workerClient client.Client) error {
-				return adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: "pod1", Namespace: TestNamespace}, "wl1", "origin1")
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				return adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: basePodName, Namespace: TestNamespace}, "wl1", "origin1")
 			},
 
 			wantManagersPods: []corev1.Pod{
@@ -89,8 +100,8 @@ func TestMultikueueAdapter(t *testing.T) {
 					StatusConditions(corev1.PodCondition{Type: corev1.PodReady, Status: corev1.ConditionTrue}).
 					Obj(),
 			},
-			operation: func(ctx context.Context, adapter *multikueueAdapter, managerClient, workerClient client.Client) error {
-				return adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: "pod1", Namespace: TestNamespace}, "wl1", "origin1")
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				return adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: basePodName, Namespace: TestNamespace}, "wl1", "origin1")
 			},
 
 			wantManagersPods: []corev1.Pod{
@@ -115,22 +126,86 @@ func TestMultikueueAdapter(t *testing.T) {
 					Label(kueue.MultiKueueOriginLabel, "origin1").
 					Obj(),
 			},
-			operation: func(ctx context.Context, adapter *multikueueAdapter, managerClient, workerClient client.Client) error {
-				return adapter.DeleteRemoteObject(ctx, workerClient, types.NamespacedName{Name: "pod1", Namespace: TestNamespace})
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				return adapter.DeleteRemoteObject(ctx, workerClient, types.NamespacedName{Name: basePodName, Namespace: TestNamespace})
 			},
 		},
 		"pod managedBy multikueue": {
 			managersPods: []corev1.Pod{
 				*basePodBuilder.Clone().Obj(),
 			},
-			operation: func(ctx context.Context, adapter *multikueueAdapter, managerClient, workerClient client.Client) error {
-				if isManged, _, _ := adapter.IsJobManagedByKueue(ctx, managerClient, types.NamespacedName{Name: "pod1", Namespace: TestNamespace}); !isManged {
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				if isManged, _, _ := adapter.IsJobManagedByKueue(ctx, managerClient, types.NamespacedName{Name: basePodName, Namespace: TestNamespace}); !isManged {
 					return errors.New("expecting true")
 				}
 				return nil
 			},
 			wantManagersPods: []corev1.Pod{
 				*basePodBuilder.Clone().Obj(),
+			},
+		},
+		"sync creates missing remote pods of the group": {
+			managersPods: []corev1.Pod{
+				*podGroup[0].Clone().Obj(),
+				*podGroup[1].Clone().Obj(),
+				*podGroup[2].Clone().Obj(),
+			},
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				return adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: podGroup[0].Obj().Name, Namespace: TestNamespace}, "wl1", "origin1")
+			},
+			wantManagersPods: []corev1.Pod{
+				*podGroup[0].Clone().Obj(),
+				*podGroup[1].Clone().Obj(),
+				*podGroup[2].Clone().Obj(),
+			},
+			wantWorkerPods: []corev1.Pod{
+				*podGroupWithWl[0].Clone().Obj(),
+				*podGroupWithWl[1].Clone().Obj(),
+				*podGroupWithWl[2].Clone().Obj(),
+			},
+		},
+		"sync status from remote pod group": {
+			managersPods: []corev1.Pod{
+				*podGroup[0].Clone().Obj(),
+				*podGroup[1].Clone().Obj(),
+				*podGroup[2].Clone().Obj(),
+			},
+			workerPods: []corev1.Pod{
+				*podGroupWithWl[0].Clone().Obj(),
+				*podGroupWithWl[1].Clone().Obj(),
+				*podGroupWithWl[2].Clone().
+					StatusPhase(corev1.PodRunning).
+					StatusConditions(corev1.PodCondition{Type: corev1.PodReady, Status: corev1.ConditionTrue}).
+					Obj(),
+			},
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				return adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: podGroup[0].Obj().Name, Namespace: TestNamespace}, "wl1", "origin1")
+			},
+			wantManagersPods: []corev1.Pod{
+				*podGroup[0].Clone().Obj(),
+				*podGroup[1].Clone().Obj(),
+				*podGroup[2].Clone().
+					StatusPhase(corev1.PodRunning).
+					StatusConditions(corev1.PodCondition{Type: corev1.PodReady, Status: corev1.ConditionTrue}).
+					Obj(),
+			},
+			wantWorkerPods: []corev1.Pod{
+				*podGroupWithWl[0].Clone().Obj(),
+				*podGroupWithWl[1].Clone().Obj(),
+				*podGroupWithWl[2].Clone().
+					StatusPhase(corev1.PodRunning).
+					StatusConditions(corev1.PodCondition{Type: corev1.PodReady, Status: corev1.ConditionTrue}).
+					Obj(),
+			},
+		},
+		"remote pod group is deleted": {
+			workerPods: []corev1.Pod{
+				*podGroupWithWl[0].Clone().Obj(),
+				*podGroupWithWl[1].Clone().Obj(),
+				*podGroupWithWl[2].Clone().Obj(),
+			},
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				return adapter.DeleteRemoteObject(ctx, workerClient, types.NamespacedName{Name: podGroup[0].Obj().Name, Namespace: TestNamespace})
 			},
 		},
 	}
@@ -147,7 +222,7 @@ func TestMultikueueAdapter(t *testing.T) {
 
 			ctx, _ := utiltesting.ContextWithLog(t)
 
-			adapter := &multikueueAdapter{}
+			adapter := &multiKueueAdapter{}
 
 			gotErr := tc.operation(ctx, adapter, managerClient, workerClient)
 

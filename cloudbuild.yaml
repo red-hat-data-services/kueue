@@ -11,6 +11,7 @@ steps:
       - debug-image-push
       - importer-image-push
       - helm-chart-push
+      - kueue-viz-image-push
     env:
       - IMAGE_REGISTRY=us-central1-docker.pkg.dev/k8s-staging-images/kueue
       - GIT_TAG=$_GIT_TAG
@@ -26,4 +27,4 @@ substitutions:
   _PULL_BASE_REF: 'main'
 options:
   substitution_option: ALLOW_LOOSE
-  machineType: 'N1_HIGHCPU_8'
+  machineType: 'E2_HIGHCPU_32'

@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package statefulset
 
 import (
 	"fmt"
-	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,11 +25,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/kueue/apis/kueue/v1alpha1"
-	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/constants"
+	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
-	"sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	podconstants "sigs.k8s.io/kueue/pkg/controller/jobs/pod/constants"
+	"sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 // StatefulSetWrapper wraps a StatefulSet.
@@ -88,7 +90,7 @@ func (ss *StatefulSetWrapper) Label(k, v string) *StatefulSetWrapper {
 
 // Queue updates the queue name of the StatefulSet
 func (ss *StatefulSetWrapper) Queue(q string) *StatefulSetWrapper {
-	return ss.Label(constants.QueueLabel, q)
+	return ss.Label(controllerconstants.QueueLabel, q)
 }
 
 // Name updated the name of the StatefulSet
@@ -97,8 +99,21 @@ func (ss *StatefulSetWrapper) Name(n string) *StatefulSetWrapper {
 	return ss
 }
 
-func (ss *StatefulSetWrapper) WithOwnerReference(ownerReference metav1.OwnerReference) *StatefulSetWrapper {
-	ss.OwnerReferences = append(ss.OwnerReferences, ownerReference)
+// UID updates the uid of the StatefulSet
+func (ss *StatefulSetWrapper) UID(uid string) *StatefulSetWrapper {
+	ss.ObjectMeta.UID = types.UID(uid)
+	return ss
+}
+
+// OwnerReference adds a ownerReference to the StatefulSet.
+func (ss *StatefulSetWrapper) OwnerReference(ownerName string, ownerGVK schema.GroupVersionKind) *StatefulSetWrapper {
+	testing.AppendOwnerReference(&ss.StatefulSet, ownerGVK, ownerName, ownerName, ptr.To(true), ptr.To(true))
+	return ss
+}
+
+// Template sets the template of the StatefulSet.
+func (ss *StatefulSetWrapper) Template(template corev1.PodTemplateSpec) *StatefulSetWrapper {
+	ss.Spec.Template = template
 	return ss
 }
 
@@ -131,7 +146,11 @@ func (ss *StatefulSetWrapper) PodTemplateSpecAnnotation(k, v string) *StatefulSe
 
 // PodTemplateSpecQueue updates the queue name of the pod template spec of the StatefulSet
 func (ss *StatefulSetWrapper) PodTemplateSpecQueue(q string) *StatefulSetWrapper {
-	return ss.PodTemplateSpecLabel(constants.QueueLabel, q)
+	return ss.PodTemplateSpecLabel(controllerconstants.QueueLabel, q)
+}
+
+func (ss *StatefulSetWrapper) PodTemplateManagedByKueue() *StatefulSetWrapper {
+	return ss.PodTemplateSpecLabel(constants.ManagedByKueueLabelKey, constants.ManagedByKueueLabelValue)
 }
 
 func (ss *StatefulSetWrapper) Replicas(r int32) *StatefulSetWrapper {
@@ -144,23 +163,38 @@ func (ss *StatefulSetWrapper) StatusReplicas(r int32) *StatefulSetWrapper {
 	return ss
 }
 
+func (ss *StatefulSetWrapper) ReadyReplicas(r int32) *StatefulSetWrapper {
+	ss.Status.ReadyReplicas = r
+	return ss
+}
+
+func (ss *StatefulSetWrapper) CurrentRevision(currentRevision string) *StatefulSetWrapper {
+	ss.Status.CurrentRevision = currentRevision
+	return ss
+}
+
+func (ss *StatefulSetWrapper) UpdateRevision(updateRevision string) *StatefulSetWrapper {
+	ss.Status.UpdateRevision = updateRevision
+	return ss
+}
+
 func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupNameLabel(
 	ownerName string, ownerUID types.UID, ownerGVK schema.GroupVersionKind,
 ) *StatefulSetWrapper {
 	gvk := jobframework.GetWorkloadNameForOwnerWithGVK(ownerName, ownerUID, ownerGVK)
-	return ss.PodTemplateSpecLabel(pod.GroupNameLabel, gvk)
+	return ss.PodTemplateSpecLabel(podconstants.GroupNameLabel, gvk)
 }
 
 func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupTotalCountAnnotation(replicas int32) *StatefulSetWrapper {
-	return ss.PodTemplateSpecAnnotation(pod.GroupTotalCountAnnotation, fmt.Sprint(replicas))
+	return ss.PodTemplateSpecAnnotation(podconstants.GroupTotalCountAnnotation, fmt.Sprint(replicas))
 }
 
-func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupFastAdmissionAnnotation(enabled bool) *StatefulSetWrapper {
-	return ss.PodTemplateSpecAnnotation(pod.GroupFastAdmissionAnnotation, strconv.FormatBool(enabled))
+func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupFastAdmissionAnnotation() *StatefulSetWrapper {
+	return ss.PodTemplateSpecAnnotation(podconstants.GroupFastAdmissionAnnotationKey, podconstants.GroupFastAdmissionAnnotationValue)
 }
 
-func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupServingAnnotation(enabled bool) *StatefulSetWrapper {
-	return ss.PodTemplateSpecAnnotation(pod.GroupServingAnnotation, strconv.FormatBool(enabled))
+func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupServingAnnotation() *StatefulSetWrapper {
+	return ss.PodTemplateSpecAnnotation(podconstants.GroupServingAnnotationKey, podconstants.GroupServingAnnotationValue)
 }
 
 func (ss *StatefulSetWrapper) PodTemplateSpecPodGroupPodIndexLabelAnnotation(labelName string) *StatefulSetWrapper {
@@ -188,5 +222,16 @@ func (ss *StatefulSetWrapper) Limit(r corev1.ResourceName, v string) *StatefulSe
 		ss.Spec.Template.Spec.Containers[0].Resources.Limits = corev1.ResourceList{}
 	}
 	ss.Spec.Template.Spec.Containers[0].Resources.Limits[r] = resource.MustParse(v)
+	return ss
+}
+
+// RequestAndLimit adds a resource request and limit to the default container.
+func (ss *StatefulSetWrapper) RequestAndLimit(r corev1.ResourceName, v string) *StatefulSetWrapper {
+	return ss.Request(r, v).Limit(r, v)
+}
+
+// TerminationGracePeriod sets terminationGracePeriodSeconds for the pod object
+func (ss *StatefulSetWrapper) TerminationGracePeriod(seconds int64) *StatefulSetWrapper {
+	ss.Spec.Template.Spec.TerminationGracePeriodSeconds = &seconds
 	return ss
 }

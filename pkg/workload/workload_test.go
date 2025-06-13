@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	testingclock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -53,7 +54,7 @@ func TestNewInfo(t *testing.T) {
 			wantInfo: Info{
 				TotalRequests: []PodSetResources{
 					{
-						Name: "main",
+						Name: kueue.DefaultPodSetName,
 						Requests: resources.Requests{
 							corev1.ResourceCPU:    10,
 							corev1.ResourceMemory: 512 * 1024,
@@ -66,14 +67,14 @@ func TestNewInfo(t *testing.T) {
 		"pending with reclaim": {
 			workload: *utiltesting.MakeWorkload("", "").
 				PodSets(
-					*utiltesting.MakePodSet("main", 5).
+					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 5).
 						Request(corev1.ResourceCPU, "10m").
 						Request(corev1.ResourceMemory, "512Ki").
 						Obj(),
 				).
 				ReclaimablePods(
 					kueue.ReclaimablePod{
-						Name:  "main",
+						Name:  kueue.DefaultPodSetName,
 						Count: 2,
 					},
 				).
@@ -81,7 +82,7 @@ func TestNewInfo(t *testing.T) {
 			wantInfo: Info{
 				TotalRequests: []PodSetResources{
 					{
-						Name: "main",
+						Name: kueue.DefaultPodSetName,
 						Requests: resources.Requests{
 							corev1.ResourceCPU:    3 * 10,
 							corev1.ResourceMemory: 3 * 512 * 1024,
@@ -158,7 +159,7 @@ func TestNewInfo(t *testing.T) {
 		"admitted with reclaim": {
 			workload: *utiltesting.MakeWorkload("", "").
 				PodSets(
-					*utiltesting.MakePodSet("main", 5).
+					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 5).
 						Request(corev1.ResourceCPU, "10m").
 						Request(corev1.ResourceMemory, "10Ki").
 						Obj(),
@@ -172,7 +173,7 @@ func TestNewInfo(t *testing.T) {
 				).
 				ReclaimablePods(
 					kueue.ReclaimablePod{
-						Name:  "main",
+						Name:  kueue.DefaultPodSetName,
 						Count: 2,
 					},
 				).
@@ -180,7 +181,7 @@ func TestNewInfo(t *testing.T) {
 			wantInfo: Info{
 				TotalRequests: []PodSetResources{
 					{
-						Name: "main",
+						Name: kueue.DefaultPodSetName,
 						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
 							corev1.ResourceCPU:    "f1",
 							corev1.ResourceMemory: "f1",
@@ -197,7 +198,7 @@ func TestNewInfo(t *testing.T) {
 		"admitted with reclaim and increased reclaim": {
 			workload: *utiltesting.MakeWorkload("", "").
 				PodSets(
-					*utiltesting.MakePodSet("main", 5).
+					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 5).
 						Request(corev1.ResourceCPU, "10m").
 						Request(corev1.ResourceMemory, "10Ki").
 						Obj(),
@@ -211,7 +212,7 @@ func TestNewInfo(t *testing.T) {
 				).
 				ReclaimablePods(
 					kueue.ReclaimablePod{
-						Name:  "main",
+						Name:  kueue.DefaultPodSetName,
 						Count: 3,
 					},
 				).
@@ -219,7 +220,7 @@ func TestNewInfo(t *testing.T) {
 			wantInfo: Info{
 				TotalRequests: []PodSetResources{
 					{
-						Name: "main",
+						Name: kueue.DefaultPodSetName,
 						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
 							corev1.ResourceCPU:    "f1",
 							corev1.ResourceMemory: "f1",
@@ -236,7 +237,7 @@ func TestNewInfo(t *testing.T) {
 		"partially admitted": {
 			workload: *utiltesting.MakeWorkload("", "").
 				PodSets(
-					*utiltesting.MakePodSet("main", 5).
+					*utiltesting.MakePodSet(kueue.DefaultPodSetName, 5).
 						Request(corev1.ResourceCPU, "10m").
 						Request(corev1.ResourceMemory, "10Ki").
 						Obj(),
@@ -252,7 +253,7 @@ func TestNewInfo(t *testing.T) {
 			wantInfo: Info{
 				TotalRequests: []PodSetResources{
 					{
-						Name: "main",
+						Name: kueue.DefaultPodSetName,
 						Flavors: map[corev1.ResourceName]kueue.ResourceFlavorReference{
 							corev1.ResourceCPU:    "f1",
 							corev1.ResourceMemory: "f1",
@@ -276,7 +277,7 @@ func TestNewInfo(t *testing.T) {
 			wantInfo: Info{
 				TotalRequests: []PodSetResources{
 					{
-						Name: "main",
+						Name: kueue.DefaultPodSetName,
 						Requests: resources.Requests{
 							corev1.ResourceCPU:    10,
 							corev1.ResourceMemory: 512 * 1024,
@@ -364,6 +365,8 @@ func TestNewInfo(t *testing.T) {
 }
 
 func TestUpdateWorkloadStatus(t *testing.T) {
+	now := time.Now()
+	fakeClock := testingclock.NewFakeClock(now)
 	cases := map[string]struct {
 		oldStatus  kueue.WorkloadStatus
 		condType   string
@@ -421,7 +424,7 @@ func TestUpdateWorkloadStatus(t *testing.T) {
 			workload.Status = tc.oldStatus
 			cl := utiltesting.NewFakeClientSSAAsSM(workload)
 			ctx := context.Background()
-			err := UpdateStatus(ctx, cl, workload, tc.condType, tc.condStatus, tc.reason, tc.message, "manager-prefix")
+			err := UpdateStatus(ctx, cl, workload, tc.condType, tc.condStatus, tc.reason, tc.message, "manager-prefix", fakeClock)
 			if err != nil {
 				t.Fatalf("Failed updating status: %v", err)
 			}
@@ -883,6 +886,202 @@ func TestAdmissionCheckStrategy(t *testing.T) {
 
 			if diff := cmp.Diff(tc.wantAdmissionChecks, gotAdmissionChecks); diff != "" {
 				t.Errorf("Unexpected AdmissionChecks, (want-/got+):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestPropagateResourceRequests(t *testing.T) {
+	cases := map[string]struct {
+		wl   *kueue.Workload
+		info *Info
+		want bool
+	}{
+		"one podset, no diff": {
+			wl: &kueue.Workload{
+				Status: kueue.WorkloadStatus{
+					ResourceRequests: []kueue.PodSetRequest{
+						{
+							Name: "ps1",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10"),
+								corev1.ResourceMemory: resource.MustParse("10Mi"),
+								"nvidia.com/gpu":      resource.MustParse("1"),
+							},
+						},
+					},
+				},
+			},
+			info: &Info{
+				TotalRequests: []PodSetResources{{
+					Name: "ps1",
+					Requests: resources.Requests{
+						corev1.ResourceCPU:    10000,
+						corev1.ResourceMemory: 10 * 1024 * 1024,
+						"nvidia.com/gpu":      1,
+					},
+				}},
+			},
+			want: false,
+		},
+		"one podset, memory missing diff": {
+			wl: &kueue.Workload{
+				Status: kueue.WorkloadStatus{
+					ResourceRequests: []kueue.PodSetRequest{
+						{
+							Name: "ps1",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10"),
+								corev1.ResourceMemory: resource.MustParse("10Mi"),
+								"nvidia.com/gpu":      resource.MustParse("1"),
+							},
+						},
+					},
+				},
+			},
+			info: &Info{
+				TotalRequests: []PodSetResources{{
+					Name: "ps1",
+					Requests: resources.Requests{
+						corev1.ResourceCPU: 5000,
+						"nvidia.com/gpu":   1,
+					},
+				}},
+			},
+			want: true,
+		},
+		"one podset, cpu diff": {
+			wl: &kueue.Workload{
+				Status: kueue.WorkloadStatus{
+					ResourceRequests: []kueue.PodSetRequest{
+						{
+							Name: "ps1",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10"),
+								corev1.ResourceMemory: resource.MustParse("10Mi"),
+								"nvidia.com/gpu":      resource.MustParse("1"),
+							},
+						},
+					},
+				},
+			},
+			info: &Info{
+				TotalRequests: []PodSetResources{{
+					Name: "ps1",
+					Requests: resources.Requests{
+						corev1.ResourceCPU:    5000,
+						corev1.ResourceMemory: 10 * 1024 * 1024,
+						"nvidia.com/gpu":      1,
+					},
+				}},
+			},
+			want: true,
+		},
+		"one podset, memory diff": {
+			wl: &kueue.Workload{
+				Status: kueue.WorkloadStatus{
+					ResourceRequests: []kueue.PodSetRequest{
+						{
+							Name: "ps1",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10"),
+								corev1.ResourceMemory: resource.MustParse("10Gi"),
+								"nvidia.com/gpu":      resource.MustParse("1"),
+							},
+						},
+					},
+				},
+			},
+			info: &Info{
+				TotalRequests: []PodSetResources{{
+					Name: "ps1",
+					Requests: resources.Requests{
+						corev1.ResourceCPU:    10000,
+						corev1.ResourceMemory: 10 * 1024 * 1024,
+						"nvidia.com/gpu":      1,
+					},
+				}},
+			},
+			want: true,
+		},
+		"one podset, gpu (extended resource) diff": {
+			wl: &kueue.Workload{
+				Status: kueue.WorkloadStatus{
+					ResourceRequests: []kueue.PodSetRequest{
+						{
+							Name: "ps1",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10"),
+								corev1.ResourceMemory: resource.MustParse("10Mi"),
+								"nvidia.com/gpu":      resource.MustParse("1"),
+							},
+						},
+					},
+				},
+			},
+			info: &Info{
+				TotalRequests: []PodSetResources{{
+					Name: "ps1",
+					Requests: resources.Requests{
+						corev1.ResourceCPU:    10000,
+						corev1.ResourceMemory: 10 * 1024 * 1024,
+						"nvidia.com/gpu":      2,
+					},
+				}},
+			},
+			want: true,
+		},
+		"two podset, no diff ": {
+			wl: &kueue.Workload{
+				Status: kueue.WorkloadStatus{
+					ResourceRequests: []kueue.PodSetRequest{
+						{
+							Name: "ps1",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10"),
+								corev1.ResourceMemory: resource.MustParse("10Mi"),
+								"nvidia.com/gpu":      resource.MustParse("1"),
+							},
+						},
+						{
+							Name: "ps2",
+							Resources: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("20"),
+								corev1.ResourceMemory: resource.MustParse("20Mi"),
+								"nvidia.com/gpu":      resource.MustParse("2"),
+							},
+						},
+					},
+				},
+			},
+			info: &Info{
+				TotalRequests: []PodSetResources{
+					{
+						Name: "ps1",
+						Requests: resources.Requests{
+							corev1.ResourceCPU:    10000,
+							corev1.ResourceMemory: 10 * 1024 * 1024,
+							"nvidia.com/gpu":      1,
+						},
+					},
+					{
+						Name: "ps2",
+						Requests: resources.Requests{
+							corev1.ResourceCPU:    20000,
+							corev1.ResourceMemory: 20 * 1024 * 1024,
+							"nvidia.com/gpu":      2,
+						},
+					},
+				},
+			},
+			want: false,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := PropagateResourceRequests(tc.wl, tc.info)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("Unexpected PropagateResourceRequests() result (-want,+got):\n%s", diff)
 			}
 		})
 	}

@@ -1,3 +1,99 @@
+## v0.9.5
+
+Changes since `v0.9.4`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fixes a bug that would result in default values not being properly set on creation for enabled integrations whose API was not available when the Kueue controller started. (#4559, @dgrove-oss)
+- Helm: Fixed a bug that prometheus namespace is enforced with namespace the same as kueue-controller-manager (#4488, @kannon92)
+- TAS: Fix a bug that TopolologyUngator cound not be triggered the leader change when enabled HA mode (#4657, @tenzen-y)
+- Update FairSharing to be incompatible with ClusterQueue.Preemption.BorrowWithinCohort. Using these parameters together is a no-op, and will be validated against in future releases. This change fixes an edge case which triggered an infinite preemption loop when these two parameters were combined. (#4165, @gabesaba)
+
+### Other (Cleanup or Flake)
+
+- Publish helm charts to the Kueue staging repository `http://us-central1-docker.pkg.dev/k8s-staging-images/kueue/charts`,
+  so that they can be promoted to the permanent location under `registry.k8s.io/kueue/charts`. (#4685, @mimowo)
+
+## v0.9.4
+
+Changes since `v0.9.3`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Add missing external types to apply configurations (#4202, @astefanutti)
+- Disable the StatefulSet webhook in the kube-system and kueue-system namespaces by default.
+  This aligns the default StatefulSet webhook configuration with the Pod and Deployment configurations. (#4161, @@dgrove-oss)
+- Fix a bug is incorrect field path in inadmissible reasons and messages when Pod resources requests do not satisfy LimitRange constraints. (#4290, @tenzen-y)
+- Fix a bug is incorrect field path in inadmissible reasons and messages when container requests exceed limits (#4246, @tenzen-y)
+- Fix a bug that allowed unsupported changes to some PodSpec fields which were resulting in the StatefulSet getting stuck on Pods with schedulingGates.
+
+  The validation blocks mutating the following Pod spec fields: `nodeSelector`, `affinity`, `tolerations`, `runtimeClassName`, `priority`, `topologySpreadConstraints`, `overhead`, `resourceClaims`, plus container (and init container) fields: `ports` and `resources.requests`.
+
+  Mutating other fields, such as container image, command or args, remains allowed and supported. (#4154, @mbobrovskyi)
+- Fix a bug that doesn't allow Kueue to delete Pods after a StatefulSet is deleted. (#4206, @mbobrovskyi)
+- Fix a bug that prevented tracking some of the controller-runtime metrics in Prometheus. (#4227, @tenzen-y)
+- Fix a bug truncating AdmissionCheck condition message at `1024` characters when creation of the associated ProvisioningRequest or PodTemplate fails.
+  Instead, use the `32*1024` characters limit as for condition messages. (#4195, @mbobrovskyi)
+- Fix the bug that prevented Kueue from updating the AdmissionCheck state in the Workload status on a ProvisioningRequest creation error. (#4118, @mbobrovskyi)
+- Helm: Fix the unspecified LeaderElection Role and Rolebinding namespaces (#4386, @eric-higgins-ai)
+- MultiKueue: Do not update the status of the Job on the management cluster while the Job is suspended. This is updated  for jobs represented by JobSet, Kubeflow Jobs and MPIJob. (#4085, @IrvingMg)
+- Propagate the top-level setting of the `kueue.x-k8s.io/priority-class` label to the PodTemplate for
+  Deployments and StatefulSets. This way the Workload Priority class is no longer ignored by the workloads. (#4036, @Abirdcfly)
+- TAS: Fix a bug that unschedulable nodes (".spec.unschedulable=true") are counted as allocatable capacities (#4209, @tenzen-y)
+- TAS: Fixed a bug that allows to create a JobSet with both kueue.x-k8s.io/podset-required-topology and kueue.x-k8s.io/podset-preferred-topology annotations set on the PodTemplate. (#4156, @mbobrovskyi)
+
+### Other (Cleanup or Flake)
+
+- Renamed Log key from "attemptCount" to "schedulingCycleCount". This key tracks how many scheduling cycles we have done since starting Kueue. (#4241, @tenzen-y)
+
+## v0.9.3
+
+Changes since `v0.9.2`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Disable the unnecessary Validating Admission Policy for the visibility server, and drop the associated RBAC permissions to make the server minimal. This also prevents periodic error logging on clusters above Kubernetes 1.29+. (#3977, @varshaprasad96)
+- Fix building TAS assignments for workloads with multiple PodSets (eg. JobSet or kubeflow Jobs). The assignment was computed independently for the PodSets which could result in conflicts rendering the pods unschedulable by the kube-scheduler. (#3972, @kerthcet)
+- Fix the bug that prevented scaling StatefulSets which aren't managed by Kueue when the "statefulset" integration is enabled. (#3999, @mbobrovskyi)
+
+## v0.9.2
+
+Changes since `v0.9.1`:
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Added validation for Deployment queue-name to fail fast (#3580, @mbobrovskyi)
+- Added validation for StatefulSet queue-name to fail fast. (#3585, @mbobrovskyi)
+- Fix a bug which occasionally prevented updates to the PodTemplate of the Job on the management cluster
+  when starting a Job (e.g. updating nodeSelectors), when using `MultiKueueBatchJobWithManagedBy` enabled. (#3731, @IrvingMg)
+- Fix dropping of reconcile requests for non-leading replica, which was resulting in workloads
+  getting stuck pending after the rolling restart of Kueue. (#3613, @mimowo)
+- Fix memory leak due to workload entries left in MultiKueue cache. The leak affects the 0.9.0 and 0.9.1
+  releases which enable MultiKueue by default, even if MultiKueue is not explicitly used on the cluster. (#3843, @mimowo)
+- Fix misleading log messages from workload_controller indicating not existing LocalQueue or
+  Cluster Queue. For example "LocalQueue for workload didn't exist or not active; ignored for now"
+  could also be logged the ClusterQueue does not exist. (#3832, @PBundyra)
+- Fix preemption when using Hierarchical Cohorts by considering as preemption candidates workloads
+  from ClusterQueues located further in the hierarchy tree than direct siblings. (#3705, @gabesaba)
+- Fix scheduling of workload which does not include the toleration for the taint in ResourceFlavor's spec.nodeTaints,
+  if the toleration is specified on the ResourceFlavor itself. (#3724, @PBundyra)
+- Fix the bug which prevented the use of MultiKueue if there is a CRD which is not installed
+  and removed from the list of enabled integrations. (#3631, @mszadkow)
+- TAS: Fixed bug that doesn't allow to update cache on delete Topology. (#3655, @mbobrovskyi)
+- TAS: The CQ referencing a Topology is deactivated if the topology does not exist. (#3819, @mimowo)
+
+### Other (Cleanup or Flake)
+
+- Replace deprecated gcr.io/kubebuilder/kube-rbac-proxy with registry.k8s.io/kubebuilder/kube-rbac-proxy. (#3749, @mbobrovskyi)
+
 ## v0.9.1
 
 Changes since `v0.9.0`:

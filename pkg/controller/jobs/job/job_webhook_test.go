@@ -1,5 +1,5 @@
 /*
-Copyright 2022 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,22 +22,26 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	kfmpi "github.com/kubeflow/mpi-operator/pkg/apis/kubeflow/v2beta1"
 	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
+	jobsetapi "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 
 	kueuealpha "sigs.k8s.io/kueue/apis/kueue/v1alpha1"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	testingutil "sigs.k8s.io/kueue/pkg/util/testingjobs/job"
+	testingmpijob "sigs.k8s.io/kueue/pkg/util/testingjobs/mpijob"
 
 	// without this only the job framework is registered
 	_ "sigs.k8s.io/kueue/pkg/controller/jobs/mpijob"
@@ -249,7 +253,8 @@ func TestValidateCreate(t *testing.T) {
 				Obj(),
 			wantErr: field.ErrorList{
 				field.Invalid(replicaMetaPath.Child("annotations"), field.OmitValueType{},
-					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`),
+					`must not contain more than one topology annotation: ["kueue.x-k8s.io/podset-required-topology", `+
+						`"kueue.x-k8s.io/podset-preferred-topology", "kueue.x-k8s.io/podset-unconstrained-topology"]`),
 			},
 		},
 		{
@@ -528,8 +533,8 @@ func TestValidateUpdate(t *testing.T) {
 				Obj(),
 			wantErr: field.ErrorList{
 				field.Invalid(replicaMetaPath.Child("annotations"), field.OmitValueType{},
-					`must not contain both "kueue.x-k8s.io/podset-required-topology" and "kueue.x-k8s.io/podset-preferred-topology"`),
-			},
+					`must not contain more than one topology annotation: ["kueue.x-k8s.io/podset-required-topology", `+
+						`"kueue.x-k8s.io/podset-preferred-topology", "kueue.x-k8s.io/podset-unconstrained-topology"]`)},
 		},
 	}
 
@@ -546,6 +551,7 @@ func TestValidateUpdate(t *testing.T) {
 func TestDefault(t *testing.T) {
 	testcases := map[string]struct {
 		job                                    *batchv1.Job
+		objs                                   []runtime.Object
 		queues                                 []kueue.LocalQueue
 		clusterQueues                          []kueue.ClusterQueue
 		admissionCheck                         *kueue.AdmissionCheck
@@ -554,6 +560,7 @@ func TestDefault(t *testing.T) {
 		multiKueueBatchJobWithManagedByEnabled bool
 		localQueueDefaulting                   bool
 		defaultLqExist                         bool
+		enableIntegrations                     []string
 		want                                   *batchv1.Job
 		wantErr                                error
 	}{
@@ -663,6 +670,32 @@ func TestDefault(t *testing.T) {
 			want: testingutil.MakeJob("test-job", "").
 				Obj(),
 		},
+		"LocalQueueDefaulting enabled, job is managed by Kueue managed owner, job doesn't have queue label": {
+			localQueueDefaulting: true,
+			defaultLqExist:       true,
+			// MPIJob callBackFunction is registered as integrations since we initialize MPIJob integration package.
+			enableIntegrations: []string{"kubeflow.org/mpijob"},
+			job: testingutil.MakeJob("test-job", metav1.NamespaceDefault).
+				OwnerReference("owner", kfmpi.SchemeGroupVersionKind).
+				Obj(),
+			objs: []runtime.Object{
+				testingmpijob.MakeMPIJob("owner", "default").UID("owner").Obj(),
+			},
+			want: testingutil.MakeJob("test-job", metav1.NamespaceDefault).
+				OwnerReference("owner", kfmpi.SchemeGroupVersionKind).
+				Obj(),
+		},
+		"LocalQueueDefaulting enabled, job is managed by non Kueue managed owner, job has queue label": {
+			localQueueDefaulting: true,
+			defaultLqExist:       true,
+			job: testingutil.MakeJob("test-job", metav1.NamespaceDefault).
+				OwnerReference("owner", jobsetapi.SchemeGroupVersion.WithKind("JobSet")).
+				Obj(),
+			want: testingutil.MakeJob("test-job", metav1.NamespaceDefault).
+				OwnerReference("owner", jobsetapi.SchemeGroupVersion.WithKind("JobSet")).
+				Queue("default").
+				Obj(),
+		},
 	}
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
@@ -670,12 +703,11 @@ func TestDefault(t *testing.T) {
 			features.SetFeatureGateDuringTest(t, features.MultiKueueBatchJobWithManagedBy, tc.multiKueueBatchJobWithManagedByEnabled)
 			features.SetFeatureGateDuringTest(t, features.LocalQueueDefaulting, tc.localQueueDefaulting)
 
-			ctx, _ := utiltesting.ContextWithLog(t)
+			ctx, log := utiltesting.ContextWithLog(t)
 
-			clientBuilder := utiltesting.NewClientBuilder().
-				WithObjects(
-					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
-				)
+			clientBuilder := utiltesting.NewClientBuilder(kfmpi.AddToScheme).
+				WithObjects(utiltesting.MakeNamespace("default")).
+				WithRuntimeObjects(tc.objs...)
 			cl := clientBuilder.Build()
 			cqCache := cache.New(cl)
 			queueManager := queue.NewManager(cl, cqCache)
@@ -696,12 +728,13 @@ func TestDefault(t *testing.T) {
 					t.Fatalf("Inserting clusterQueue %s in cache: %v", cq.Name, err)
 				}
 				if tc.admissionCheck != nil {
-					cqCache.AddOrUpdateAdmissionCheck(tc.admissionCheck)
+					cqCache.AddOrUpdateAdmissionCheck(log, tc.admissionCheck)
 					if err := queueManager.AddClusterQueue(ctx, &cq); err != nil {
 						t.Fatalf("Inserting clusterQueue %s in manager: %v", cq.Name, err)
 					}
 				}
 			}
+			t.Cleanup(jobframework.EnableIntegrationsForTest(t, tc.enableIntegrations...))
 			w := &JobWebhook{
 				client:                       cl,
 				manageJobsWithoutQueueName:   tc.manageJobsWithoutQueueName,
