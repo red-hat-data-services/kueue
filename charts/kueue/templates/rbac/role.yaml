@@ -82,6 +82,7 @@ rules:
   - apiGroups:
       - apps
     resources:
+      - deployments
       - replicasets
       - statefulsets
     verbs:
@@ -168,7 +169,6 @@ rules:
       - kubeflow.org
     resources:
       - mpijobs
-      - mxjobs
       - paddlejobs
       - pytorchjobs
       - tfjobs
@@ -183,8 +183,6 @@ rules:
       - kubeflow.org
     resources:
       - mpijobs/finalizers
-      - mxjobs/finalizers
-      - mxjobs/status
       - paddlejobs/finalizers
       - pytorchjobs/finalizers
       - tfjobs/finalizers
@@ -236,6 +234,7 @@ rules:
     resources:
       - admissionchecks/status
       - clusterqueues/status
+      - cohorts/status
       - localqueues/status
       - multikueueclusters/status
       - workloads/status
@@ -274,6 +273,14 @@ rules:
       - update
       - watch
   - apiGroups:
+      - leaderworkerset.x-k8s.io
+    resources:
+      - leaderworkersets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
       - node.k8s.io
     resources:
       - runtimeclasses
@@ -296,11 +303,18 @@ rules:
       - ray.io
     resources:
       - rayclusters/finalizers
-      - rayclusters/status
       - rayjobs/finalizers
+    verbs:
+      - get
+      - update
+  - apiGroups:
+      - ray.io
+    resources:
+      - rayclusters/status
       - rayjobs/status
     verbs:
       - get
+      - patch
       - update
   - apiGroups:
       - scheduling.k8s.io
@@ -310,3 +324,28 @@ rules:
       - get
       - list
       - watch
+  - apiGroups:
+      - workload.codeflare.dev
+    resources:
+      - appwrappers
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - workload.codeflare.dev
+    resources:
+      - appwrappers/finalizers
+    verbs:
+      - get
+      - update
+  - apiGroups:
+      - workload.codeflare.dev
+    resources:
+      - appwrappers/status
+    verbs:
+      - get
+      - patch
+      - update

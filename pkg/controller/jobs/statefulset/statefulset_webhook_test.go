@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,20 +22,28 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	awv1beta2 "github.com/project-codeflare/appwrapper/api/v1beta2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	leaderworkersetv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
 
 	"sigs.k8s.io/kueue/pkg/cache"
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
-	"sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	"sigs.k8s.io/kueue/pkg/controller/jobs/appwrapper"
+	"sigs.k8s.io/kueue/pkg/controller/jobs/leaderworkerset"
+	podconstants "sigs.k8s.io/kueue/pkg/controller/jobs/pod/constants"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/queue"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
+	testingappwrapper "sigs.k8s.io/kueue/pkg/util/testingjobs/appwrapper"
+	testingleaderworkerset "sigs.k8s.io/kueue/pkg/util/testingjobs/leaderworkerset"
 	testingstatefulset "sigs.k8s.io/kueue/pkg/util/testingjobs/statefulset"
 )
 
@@ -58,11 +66,34 @@ func TestDefault(t *testing.T) {
 				Replicas(10).
 				Queue("test-queue").
 				PodTemplateSpecQueue("test-queue").
-				PodTemplateAnnotation(pod.SuspendedByParentAnnotation, FrameworkName).
+				PodTemplateManagedByKueue().
+				PodTemplateAnnotation(podconstants.SuspendedByParentAnnotation, FrameworkName).
 				PodTemplateSpecPodGroupNameLabel("test-pod", "", gvk).
 				PodTemplateSpecPodGroupTotalCountAnnotation(10).
-				PodTemplateSpecPodGroupFastAdmissionAnnotation(true).
-				PodTemplateSpecPodGroupServingAnnotation(true).
+				PodTemplateSpecPodGroupFastAdmissionAnnotation().
+				PodTemplateSpecPodGroupServingAnnotation().
+				PodTemplateSpecPodGroupPodIndexLabelAnnotation(appsv1.PodIndexLabel).
+				Obj(),
+		},
+		"statefulset with queue and priority class": {
+			enableIntegrations: []string{"pod"},
+			statefulset: testingstatefulset.MakeStatefulSet("test-pod", "").
+				Replicas(10).
+				Queue("test-queue").
+				Label(constants.WorkloadPriorityClassLabel, "test").
+				Obj(),
+			want: testingstatefulset.MakeStatefulSet("test-pod", "").
+				Replicas(10).
+				Queue("test-queue").
+				Label(constants.WorkloadPriorityClassLabel, "test").
+				PodTemplateSpecQueue("test-queue").
+				PodTemplateManagedByKueue().
+				PodTemplateAnnotation(podconstants.SuspendedByParentAnnotation, FrameworkName).
+				PodTemplateSpecLabel(constants.WorkloadPriorityClassLabel, "test").
+				PodTemplateSpecPodGroupNameLabel("test-pod", "", gvk).
+				PodTemplateSpecPodGroupTotalCountAnnotation(10).
+				PodTemplateSpecPodGroupFastAdmissionAnnotation().
+				PodTemplateSpecPodGroupServingAnnotation().
 				PodTemplateSpecPodGroupPodIndexLabelAnnotation(appsv1.PodIndexLabel).
 				Obj(),
 		},
@@ -73,12 +104,13 @@ func TestDefault(t *testing.T) {
 				Obj(),
 			want: testingstatefulset.MakeStatefulSet("test-pod", "").
 				Queue("test-queue").
+				PodTemplateManagedByKueue().
 				PodTemplateSpecPodGroupNameLabel("test-pod", "", gvk).
 				PodTemplateSpecPodGroupTotalCountAnnotation(1).
 				PodTemplateSpecQueue("test-queue").
-				PodTemplateAnnotation(pod.SuspendedByParentAnnotation, FrameworkName).
-				PodTemplateSpecPodGroupFastAdmissionAnnotation(true).
-				PodTemplateSpecPodGroupServingAnnotation(true).
+				PodTemplateAnnotation(podconstants.SuspendedByParentAnnotation, FrameworkName).
+				PodTemplateSpecPodGroupFastAdmissionAnnotation().
+				PodTemplateSpecPodGroupServingAnnotation().
 				PodTemplateSpecPodGroupPodIndexLabelAnnotation(appsv1.PodIndexLabel).
 				Obj(),
 		},
@@ -89,11 +121,12 @@ func TestDefault(t *testing.T) {
 			want: testingstatefulset.MakeStatefulSet("test-pod", "default").
 				Queue("default").
 				PodTemplateSpecQueue("default").
-				PodTemplateAnnotation(pod.SuspendedByParentAnnotation, FrameworkName).
+				PodTemplateManagedByKueue().
+				PodTemplateAnnotation(podconstants.SuspendedByParentAnnotation, FrameworkName).
 				PodTemplateSpecPodGroupNameLabel("test-pod", "", gvk).
 				PodTemplateSpecPodGroupTotalCountAnnotation(1).
-				PodTemplateSpecPodGroupFastAdmissionAnnotation(true).
-				PodTemplateSpecPodGroupServingAnnotation(true).
+				PodTemplateSpecPodGroupFastAdmissionAnnotation().
+				PodTemplateSpecPodGroupServingAnnotation().
 				PodTemplateSpecPodGroupPodIndexLabelAnnotation(appsv1.PodIndexLabel).
 				Obj(),
 		},
@@ -104,11 +137,12 @@ func TestDefault(t *testing.T) {
 			want: testingstatefulset.MakeStatefulSet("test-pod", "").
 				Queue("test-queue").
 				PodTemplateSpecQueue("test-queue").
-				PodTemplateAnnotation(pod.SuspendedByParentAnnotation, FrameworkName).
+				PodTemplateManagedByKueue().
+				PodTemplateAnnotation(podconstants.SuspendedByParentAnnotation, FrameworkName).
 				PodTemplateSpecPodGroupNameLabel("test-pod", "", gvk).
 				PodTemplateSpecPodGroupTotalCountAnnotation(1).
-				PodTemplateSpecPodGroupFastAdmissionAnnotation(true).
-				PodTemplateSpecPodGroupServingAnnotation(true).
+				PodTemplateSpecPodGroupFastAdmissionAnnotation().
+				PodTemplateSpecPodGroupServingAnnotation().
 				PodTemplateSpecPodGroupPodIndexLabelAnnotation(appsv1.PodIndexLabel).
 				Obj(),
 		},
@@ -200,16 +234,18 @@ func TestValidateCreate(t *testing.T) {
 
 func TestValidateUpdate(t *testing.T) {
 	testCases := map[string]struct {
-		oldObj  *appsv1.StatefulSet
-		newObj  *appsv1.StatefulSet
-		wantErr error
+		integrations []string
+		objs         []runtime.Object
+		oldObj       *appsv1.StatefulSet
+		newObj       *appsv1.StatefulSet
+		wantErr      error
 	}{
 		"no changes": {
 			oldObj: &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						constants.QueueLabel: "queue1",
-						pod.GroupNameLabel:   "group1",
+						constants.QueueLabel:        "queue1",
+						podconstants.GroupNameLabel: "group1",
 					},
 				},
 				Spec: appsv1.StatefulSetSpec{
@@ -226,8 +262,8 @@ func TestValidateUpdate(t *testing.T) {
 			newObj: &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						constants.QueueLabel: "queue1",
-						pod.GroupNameLabel:   "group1",
+						constants.QueueLabel:        "queue1",
+						podconstants.GroupNameLabel: "group1",
 					},
 				},
 				Spec: appsv1.StatefulSetSpec{
@@ -244,20 +280,22 @@ func TestValidateUpdate(t *testing.T) {
 			wantErr: nil,
 		},
 		"change in queue label": {
-			oldObj: &appsv1.StatefulSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						constants.QueueLabel: "queue1",
-					},
-				},
-			},
-			newObj: &appsv1.StatefulSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						constants.QueueLabel: "queue2",
-					},
-				},
-			},
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue-new").
+				Obj(),
+		},
+		"change in queue label (ReadyReplicas > 0)": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				ReadyReplicas(1).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue-new").
+				ReadyReplicas(1).
+				Obj(),
 			wantErr: field.ErrorList{
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
@@ -265,55 +303,62 @@ func TestValidateUpdate(t *testing.T) {
 				},
 			}.ToAggregate(),
 		},
-		"change in pod template queue label": {
-			oldObj: &appsv1.StatefulSet{
-				Spec: appsv1.StatefulSetSpec{
-					Template: corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{
-							Labels: map[string]string{
-								constants.QueueLabel: "queue1",
-							},
-						},
-					},
-				},
-			},
-			newObj: &appsv1.StatefulSet{
-				Spec: appsv1.StatefulSetSpec{
-					Template: corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{
-							Labels: map[string]string{
-								constants.QueueLabel: "queue2",
-							},
-						},
-					},
-				},
-			},
+		"set queue label": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Obj(),
+		},
+		"set queue label (ReadyReplicas > 0)": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				ReadyReplicas(1).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				ReadyReplicas(1).
+				Obj(),
 			wantErr: field.ErrorList{
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
-					Field: podSpecQueueNameLabelPath.String(),
+					Field: queueNameLabelPath.String(),
 				},
 			}.ToAggregate(),
 		},
-		"change in group name label": {
+		"delete queue name": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Obj(),
+			wantErr: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: queueNameLabelPath.String(),
+				},
+			}.ToAggregate(),
+		},
+		"change in priority class label": {
 			oldObj: &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						pod.GroupNameLabel: "group1",
+						constants.QueueLabel:                 "queue1",
+						constants.WorkloadPriorityClassLabel: "priority1",
 					},
 				},
 			},
 			newObj: &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						pod.GroupNameLabel: "group2",
+						constants.QueueLabel:                 "queue1",
+						constants.WorkloadPriorityClassLabel: "priority2",
 					},
 				},
 			},
 			wantErr: field.ErrorList{
 				&field.Error{
 					Type:  field.ErrorTypeInvalid,
-					Field: groupNameLabelPath.String(),
+					Field: priorityClassNameLabelPath.String(),
 				},
 			}.ToAggregate(),
 		},
@@ -394,13 +439,204 @@ func TestValidateUpdate(t *testing.T) {
 				Replicas(4).
 				Obj(),
 		},
+		"change in replicas (scale up with AppWrapper ownerReference while the previous scaling operation is still in progress)": {
+			integrations: []string{appwrapper.FrameworkName},
+			objs: []runtime.Object{
+				testingappwrapper.MakeAppWrapper("test-app-wrapper", "test-ns").
+					UID("test-app-wrapper").
+					Queue("test-queue").
+					Obj(),
+			},
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Replicas(0).
+				StatusReplicas(3).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				OwnerReference("test-app-wrapper", awv1beta2.GroupVersion.WithKind(awv1beta2.AppWrapperKind)).
+				Queue("test-queue").
+				Replicas(3).
+				StatusReplicas(1).
+				Obj(),
+		},
+		"change in replicas (scale up with AppWrapper ownerReference)": {
+			integrations: []string{appwrapper.FrameworkName},
+			objs: []runtime.Object{
+				testingappwrapper.MakeAppWrapper("test-app-wrapper", "test-ns").
+					UID("test-app-wrapper").
+					Queue("test-queue").
+					Obj(),
+			},
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Replicas(3).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				OwnerReference("test-app-wrapper", awv1beta2.GroupVersion.WithKind(awv1beta2.AppWrapperKind)).
+				Queue("test-queue").
+				Replicas(4).
+				Obj(),
+		},
+		"change in replicas (scale up with LeaderWorkerSet ownerReference while the previous scaling operation is still in progress)": {
+			integrations: []string{leaderworkerset.FrameworkName},
+			objs: []runtime.Object{
+				testingleaderworkerset.MakeLeaderWorkerSet("test-lws", "test-ns").
+					UID("test-lws").
+					Queue("test-queue").
+					Obj(),
+			},
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Replicas(0).
+				StatusReplicas(3).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				OwnerReference("test-lws", leaderworkersetv1.GroupVersion.WithKind("LeaderWorkerSet")).
+				Queue("test-queue").
+				Replicas(3).
+				StatusReplicas(1).
+				Obj(),
+		},
+		"change in replicas (scale up with LeaderWorkerSet ownerReference)": {
+			integrations: []string{leaderworkerset.FrameworkName},
+			objs: []runtime.Object{
+				testingleaderworkerset.MakeLeaderWorkerSet("test-lws", "test-ns").
+					UID("test-lws").
+					Queue("test-queue").
+					Obj(),
+			},
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Replicas(3).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				OwnerReference("test-lws", leaderworkersetv1.GroupVersion.WithKind("LeaderWorkerSet")).
+				Queue("test-queue").
+				Replicas(4).
+				Obj(),
+		},
+		"attempt to change resources in container": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Template(corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:      "c",
+								Image:     "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							},
+						},
+						InitContainers: []corev1.Container{
+							{
+								Name:      "ic",
+								Image:     "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							},
+						},
+					},
+				}).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Template(corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "c",
+								Image: "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU: resource.MustParse("1"),
+									},
+								},
+							},
+						},
+						InitContainers: []corev1.Container{
+							{
+								Name:      "ic",
+								Image:     "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							},
+						},
+					},
+				}).
+				Obj(),
+			wantErr: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: podSpecPath.Child("containers").Index(0).Child("resources", "requests").String(),
+				},
+			}.ToAggregate(),
+		},
+		"attempt to change resources in init container": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Template(corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:      "c",
+								Image:     "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							},
+						},
+						InitContainers: []corev1.Container{
+							{
+								Name:      "ic",
+								Image:     "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							},
+						},
+					},
+				}).
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "test-ns").
+				Queue("test-queue").
+				Template(corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "c",
+								Image: "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceCPU: resource.MustParse("1"),
+									},
+								},
+							},
+						},
+						InitContainers: []corev1.Container{
+							{
+								Name:      "ic",
+								Image:     "pause:0.1.1",
+								Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{}},
+							},
+						},
+					},
+				}).
+				Obj(),
+			wantErr: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: podSpecPath.Child("containers").Index(0).Child("resources", "requests").String(),
+				},
+			}.ToAggregate(),
+		},
 	}
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			t.Cleanup(jobframework.EnableIntegrationsForTest(t, tc.integrations...))
 			ctx := context.Background()
 
-			wh := &Webhook{}
+			client := utiltesting.NewClientBuilder(awv1beta2.AddToScheme, leaderworkersetv1.AddToScheme).
+				WithRuntimeObjects(tc.objs...).
+				Build()
+
+			wh := &Webhook{
+				client: client,
+			}
 
 			_, err := wh.ValidateUpdate(ctx, tc.oldObj, tc.newObj)
 			if diff := cmp.Diff(tc.wantErr, err, cmpopts.IgnoreFields(field.Error{}, "BadValue", "Detail")); diff != "" {
