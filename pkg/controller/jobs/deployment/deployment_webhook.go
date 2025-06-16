@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,10 +28,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"sigs.k8s.io/kueue/pkg/controller/constants"
+	"sigs.k8s.io/kueue/pkg/constants"
+	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework/webhook"
-	"sigs.k8s.io/kueue/pkg/controller/jobs/pod"
+	podconstants "sigs.k8s.io/kueue/pkg/controller/jobs/pod/constants"
 	"sigs.k8s.io/kueue/pkg/queue"
 )
 
@@ -77,13 +78,17 @@ func (wh *Webhook) Default(ctx context.Context, obj runtime.Object) error {
 		if deployment.Spec.Template.Annotations == nil {
 			deployment.Spec.Template.Annotations = make(map[string]string, 1)
 		}
-		deployment.Spec.Template.Annotations[pod.SuspendedByParentAnnotation] = FrameworkName
+		deployment.Spec.Template.Annotations[podconstants.SuspendedByParentAnnotation] = FrameworkName
 		if deployment.Spec.Template.Labels == nil {
 			deployment.Spec.Template.Labels = make(map[string]string, 1)
 		}
+		deployment.Spec.Template.Labels[constants.ManagedByKueueLabelKey] = constants.ManagedByKueueLabelValue
 		queueName := jobframework.QueueNameForObject(deployment.Object())
 		if queueName != "" {
-			deployment.Spec.Template.Labels[constants.QueueLabel] = queueName
+			deployment.Spec.Template.Labels[controllerconstants.QueueLabel] = queueName
+		}
+		if priorityClass := jobframework.WorkloadPriorityClassName(deployment.Object()); priorityClass != "" {
+			deployment.Spec.Template.Labels[controllerconstants.WorkloadPriorityClassLabel] = priorityClass
 		}
 	}
 
@@ -107,7 +112,7 @@ func (wh *Webhook) ValidateCreate(ctx context.Context, obj runtime.Object) (warn
 
 var (
 	labelsPath         = field.NewPath("metadata", "labels")
-	queueNameLabelPath = labelsPath.Key(constants.QueueLabel)
+	queueNameLabelPath = labelsPath.Key(controllerconstants.QueueLabel)
 )
 
 func (wh *Webhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (warnings admission.Warnings, err error) {
@@ -120,8 +125,8 @@ func (wh *Webhook) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Ob
 	oldQueueName := jobframework.QueueNameForObject(oldDeployment.Object())
 	newQueueName := jobframework.QueueNameForObject(newDeployment.Object())
 
-	allErrs := field.ErrorList{}
-	allErrs = append(allErrs, jobframework.ValidateQueueName(newDeployment.Object())...)
+	allErrs := jobframework.ValidateQueueName(newDeployment.Object())
+	allErrs = append(allErrs, jobframework.ValidateUpdateForWorkloadPriorityClassName(oldDeployment.Object(), newDeployment.Object())...)
 
 	// Prevents updating the queue-name if at least one Pod is not suspended
 	// or if the queue-name has been deleted.

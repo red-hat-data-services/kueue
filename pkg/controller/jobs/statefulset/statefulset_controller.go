@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -38,14 +39,19 @@ const (
 
 func init() {
 	utilruntime.Must(jobframework.RegisterIntegration(FrameworkName, jobframework.IntegrationCallbacks{
-		SetupIndexes:   SetupIndexes,
-		NewReconciler:  NewReconciler,
-		SetupWebhook:   SetupWebhook,
-		JobType:        &appsv1.StatefulSet{},
-		AddToScheme:    appsv1.AddToScheme,
-		DependencyList: []string{"pod"},
-		GVK:            gvk,
+		SetupIndexes:           SetupIndexes,
+		NewReconciler:          NewReconciler,
+		SetupWebhook:           SetupWebhook,
+		JobType:                &appsv1.StatefulSet{},
+		AddToScheme:            appsv1.AddToScheme,
+		DependencyList:         []string{"pod"},
+		GVK:                    gvk,
+		IsManagingObjectsOwner: isStatefulSet,
 	}))
+}
+
+func isStatefulSet(ref *metav1.OwnerReference) bool {
+	return ref.Kind == "StatefulSet" && ref.APIVersion == "apps/v1"
 }
 
 type StatefulSet appsv1.StatefulSet

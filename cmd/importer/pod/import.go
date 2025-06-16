@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -148,7 +149,7 @@ func checkError(err error) (retry, reload bool, timeout time.Duration) {
 
 func addLabels(ctx context.Context, c client.Client, p *corev1.Pod, queue string, addLabels map[string]string) error {
 	p.Labels[controllerconstants.QueueLabel] = queue
-	p.Labels[pod.ManagedLabelKey] = pod.ManagedLabelValue
+	p.Labels[constants.ManagedByKueueLabelKey] = constants.ManagedByKueueLabelValue
 	maps.Copy(p.Labels, addLabels)
 
 	err := c.Update(ctx, p)
@@ -169,7 +170,7 @@ func addLabels(ctx context.Context, c client.Client, p *corev1.Pod, queue string
 				continue
 			}
 			p.Labels[controllerconstants.QueueLabel] = queue
-			p.Labels[pod.ManagedLabelKey] = pod.ManagedLabelValue
+			p.Labels[constants.ManagedByKueueLabelKey] = constants.ManagedByKueueLabelValue
 			maps.Copy(p.Labels, addLabels)
 		}
 		err = c.Update(ctx, p)
@@ -199,7 +200,8 @@ func createWorkload(ctx context.Context, c client.Client, wl *kueue.Workload) er
 }
 
 func admitWorkload(ctx context.Context, c client.Client, wl *kueue.Workload) error {
-	err := workload.ApplyAdmissionStatus(ctx, c, wl, false)
+	var realClock = clock.RealClock{}
+	err := workload.ApplyAdmissionStatus(ctx, c, wl, false, realClock)
 	retry, _, timeout := checkError(err)
 	for retry {
 		if timeout >= 0 {
@@ -209,7 +211,7 @@ func admitWorkload(ctx context.Context, c client.Client, wl *kueue.Workload) err
 			case <-time.After(timeout):
 			}
 		}
-		err = workload.ApplyAdmissionStatus(ctx, c, wl, false)
+		err = workload.ApplyAdmissionStatus(ctx, c, wl, false, realClock)
 		retry, _, timeout = checkError(err)
 	}
 	return err

@@ -29,8 +29,13 @@ controllerManager:
         memory: 512Mi
     podSecurityContext:
       runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
     containerSecurityContext:
       allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
   replicas: 1
   imagePullSecrets: []
   readinessProbe:
@@ -80,6 +85,7 @@ managerConfig:
     #waitForPodsReady:
     #  enable: false
     #  timeout: 5m
+    #  recoveryTimeout: 3m
     #  blockAdmission: false
     #  requeuingStrategy:
     #    timestamp: Eviction
@@ -87,6 +93,11 @@ managerConfig:
     #    backoffBaseSeconds: 60
     #    backoffMaxSeconds: 3600
     #manageJobsWithoutQueueName: true
+    #managedJobsNamespaceSelector:
+    #  matchExpressions:
+    #    - key: kubernetes.io/metadata.name
+    #      operator: NotIn
+    #      values: [ kube-system, kueue-system ]
     #internalCertManagement:
     #  enable: false
     #  webhookServiceName: ""
@@ -98,11 +109,11 @@ managerConfig:
       - "ray.io/rayjob"
       - "ray.io/raycluster"
       - "jobset.x-k8s.io/jobset"
-      - "kubeflow.org/mxjob"
       - "kubeflow.org/paddlejob"
       - "kubeflow.org/pytorchjob"
       - "kubeflow.org/tfjob"
       - "kubeflow.org/xgboostjob"
+      - "workload.codeflare.dev/appwrapper"
     #  - "pod"
     #  - "deployment"
       externalFrameworks:
@@ -130,7 +141,7 @@ metricsService:
     - name: https
       port: 8443
       protocol: TCP
-      targetPort: https
+      targetPort: 8443
   type: ClusterIP
   annotations: {}
 webhookService:
@@ -143,3 +154,12 @@ webhookService:
       protocol: TCP
       targetPort: 9443
   type: ClusterIP
+
+# kueue-viz dashboard
+enableKueueViz: false
+
+metrics:
+  prometheusNamespace: monitoring
+  serviceMonitor:
+    tlsConfig:
+      insecureSkipVerify: true

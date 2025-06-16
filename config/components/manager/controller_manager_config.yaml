@@ -28,8 +28,10 @@ waitForPodsReady:
   blockAdmission: false
 #manageJobsWithoutQueueName: true
 #managedJobsNamespaceSelector:
-#  matchLabels:
-#    kueue-managed: "true"
+#  matchExpressions:
+#    - key: kubernetes.io/metadata.name
+#      operator: NotIn
+#      values: [ kube-system, kueue-system ]
 #internalCertManagement:
 #  enable: false
 #  webhookServiceName: ""
@@ -41,16 +43,14 @@ integrations:
   - "ray.io/rayjob"
   - "ray.io/raycluster"
   - "jobset.x-k8s.io/jobset"
-  - "kubeflow.org/mxjob"
   - "kubeflow.org/paddlejob"
   - "kubeflow.org/pytorchjob"
   - "kubeflow.org/tfjob"
   - "kubeflow.org/xgboostjob"
+  - "workload.codeflare.dev/appwrapper"
 #  - "pod"
 #  - "deployment" # requires enabling pod integration
 #  - "statefulset" # requires enabling pod integration
-  externalFrameworks:
-  - "AppWrapper.v1beta2.workload.codeflare.dev"
 #  podOptions:
 #    namespaceSelector:
 #      matchExpressions:

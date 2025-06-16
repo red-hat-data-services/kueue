@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ limitations under the License.
 package resources
 
 import (
+	"math"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -79,6 +80,36 @@ func TestCountIn(t *testing.T) {
 				corev1.ResourceCPU: 5,
 			},
 			wantResult: 2,
+		},
+		"requests amount of zero": {
+			requests: Requests{
+				corev1.ResourceCPU: 0,
+			},
+			capacity: Requests{
+				corev1.ResourceCPU: 5,
+			},
+			wantResult: int32(math.MaxInt32),
+		},
+		"has one resource with request amount of zero": {
+			requests: Requests{
+				corev1.ResourceCPU:    0,
+				corev1.ResourceMemory: 1,
+			},
+			capacity: Requests{
+				corev1.ResourceCPU:    5,
+				corev1.ResourceMemory: 5,
+			},
+			wantResult: 5,
+		},
+		"requests amount of zero for extra resource": {
+			requests: Requests{
+				corev1.ResourceCPU:    1,
+				corev1.ResourceMemory: 0,
+			},
+			capacity: Requests{
+				corev1.ResourceCPU: 5,
+			},
+			wantResult: 5,
 		},
 	}
 	for name, tc := range cases {
