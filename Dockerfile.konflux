@@ -4,7 +4,7 @@ FROM registry.redhat.io/ubi8/ubi:latest AS builder
 ARG GOLANG_VERSION=1.23.2
 
 # Install system dependencies
-RUN dnf upgrade -y && dnf install -y \
+RUN dnf install -y \
     gcc \
     make \
     openssl-devel \
