@@ -4,7 +4,7 @@ FROM registry.redhat.io/ubi8/ubi@sha256:f538f6d5a9a939df1a96aed42bc68505ca8096ce
 ARG GOLANG_VERSION=1.23.2
 
 # Install system dependencies
-RUN dnf install -y \
+RUN dnf upgrade -y && dnf install -y \
     gcc \
     make \
     openssl-devel \
