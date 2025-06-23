@@ -1,21 +1,4 @@
-FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:1.23.2@sha256:ca0c771ecd4f606986253f747e2773fe2960a6b5e8e7a52f6a4797b173ac7f56 AS golang
-
-FROM registry.redhat.io/ubi8/ubi@sha256:f538f6d5a9a939df1a96aed42bc68505ca8096ceca14875d083945917dcc1717 AS builder
-ARG GOLANG_VERSION=1.23.2
-
-# Install system dependencies
-RUN dnf upgrade -y && dnf install -y \
-    gcc \
-    make \
-    openssl-devel \
-    git \
-    && dnf clean all && rm -rf /var/cache/yum
-
-# Install Go
-ENV PATH=/usr/local/go/bin:$PATH
-
-COPY --from=golang /usr/lib/golang /usr/local/go
-# End of Go versioning workaround
+FROM registry.access.redhat.com/ubi8/go-toolset@sha256:f79e40e156b5c887b1e12ae7a2f6c59b0f720e9fc7874a328a1d76e558297f48 AS builder
 
 WORKDIR /workspace
 
