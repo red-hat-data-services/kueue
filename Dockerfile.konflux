@@ -1,6 +1,6 @@
 FROM registry.redhat.io/ubi8/go-toolset:1.21@sha256:4ec05fd5b355106cc0d990021a05b71bbfb9231e4f5bdc0c5316515edf6a1c96 AS golang
 
-FROM registry.redhat.io/ubi8/ubi@sha256:c0b07294568b8c1281d3ad89616ce036095da770a4410147c1755d930b562682 AS builder
+FROM registry.redhat.io/ubi8/ubi@sha256:e2ebb79368f8691bc4324d75040c0b0c34a97f4a9c430cf7d8866b310ab9c38e AS builder
 
 ARG GOLANG_VERSION=1.21.6
 
