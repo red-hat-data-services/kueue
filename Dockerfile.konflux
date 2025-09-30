@@ -38,7 +38,8 @@ FROM registry.redhat.io/ubi8/ubi-minimal@sha256:b2a1bec3dfbc7a14a1d84d98934dfe8f
 ARG USER=65532
 
 LABEL com.redhat.component="odh-kueue-controller-container" \
-      name="managed-open-data-hub/odh-kueue-controller-rhel8" \
+      name="rhoai/odh-kueue-controller-rhel8" \
+      cpe="cpe:/a:redhat:openshift_ai:2.20::el8" \
       description="Kueue is a set of APIs and controller for job queueing. It is a job-level manager that decides when a job should be admitted to start (as in pods can be created) and when it should stop (as in active pods should be deleted)." \
       summary="odh-kueue-controller" \
       maintainer="['managed-open-data-hub@redhat.com']" \
