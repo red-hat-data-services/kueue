@@ -1,4 +1,4 @@
-FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:v1.24@sha256:beed4519c775d6123c11351048be29e6f93ab0adaea2c7d55977b445966f5b27 AS builder
+FROM brew.registry.redhat.io/rh-osbs/openshift-golang-builder:v1.24@sha256:8412323224878c4e27cd6f7dc6ce99c50f878f37df323285bff29a53f8ec37cd AS builder
 
 WORKDIR /workspace
 
@@ -15,7 +15,7 @@ COPY . .
 # Build
 RUN    CGO_ENABLED=1    GOEXPERIMENT=strictfipsruntime    go build  -tags strictfipsruntime -o bin/manager cmd/kueue/main.go
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:7c5495d5fad59aaee12abc3cbbd2b283818ee1e814b00dbc7f25bf2d14fa4f0c AS runtime
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:34880b64c07f28f64d95737f82f891516de9a3b43583f39970f7bf8e4cfa48b7 AS runtime
 
 ## Build args to be used at this step
 ARG USER=65532
