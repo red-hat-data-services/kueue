@@ -1,21 +1,4 @@
-# Start of Go versioning workaround for lack of go-toolset for version 1.22
-FROM registry-proxy.engineering.redhat.com/rh-osbs/openshift-golang-builder:v1.22.2 AS golang
-
-FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
-
-ARG GOLANG_VERSION=1.22.2
-
-# Install system dependencies
-RUN dnf upgrade -y && dnf install -y \
-    gcc \
-    make \
-    openssl-devel \
-    && dnf clean all && rm -rf /var/cache/yum
-
-# Install Go
-ENV PATH=/usr/local/go/bin:$PATH
-
-COPY --from=golang /usr/lib/golang /usr/local/go
+FROM FROM registry.access.redhat.com/ubi8/go-toolset:1.25@sha256:070a8b01fe3c47cda74390c49c37e0abde1157c162cc3a46be1698564a18f923 AS builder
 
 WORKDIR /workspace
 
