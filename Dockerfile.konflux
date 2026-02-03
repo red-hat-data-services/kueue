@@ -33,7 +33,7 @@ LABEL com.redhat.component="odh-kueue-controller-container" \
 
 WORKDIR /
 USER root
-COPY --from=builder /workspace/bin/manager /manager
+COPY --from=BUILDER /workspace/bin/manager /manager
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]
