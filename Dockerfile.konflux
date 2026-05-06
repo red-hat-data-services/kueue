@@ -15,7 +15,7 @@ COPY . .
 # Build
 RUN    CGO_ENABLED=1    GOEXPERIMENT=strictfipsruntime    go build  -tags strictfipsruntime -o bin/manager cmd/kueue/main.go
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:8d0a8fb39ec907e8ca62cdd24b62a63ca49a30fe465798a360741fde58437a23 AS runtime
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:b9b10f42d7eba7ad4a6d5ef26b7d34fdc892b2ffe59b8d0372ec884008569eb6 AS runtime
 
 ## Build args to be used at this step
 ARG USER=65532
