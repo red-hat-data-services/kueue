@@ -15,7 +15,7 @@ COPY --chown=1001:0 . .
 # Build
 RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
 
-FROM registry.redhat.io/ubi8/ubi-minimal@sha256:f0ed53122215c6cccdc992166caa9f6b56c08b202e8b1144dd1c2ad04579415d AS runtime
+FROM registry.redhat.io/ubi8/ubi-minimal@sha256:f2e5ee35da5f4dc16770d4319f1753c9b20fc859a98240d804197f1818332a89 AS runtime
 
 ## Build args to be used at this step
 ARG USER=65532
