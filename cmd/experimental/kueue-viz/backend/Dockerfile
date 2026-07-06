@@ -1,5 +1,5 @@
 # Build stage
-ARG BUILDER_IMAGE=golang:1.24.13
+ARG BUILDER_IMAGE=golang:1.26.3
 ARG BASE_IMAGE=gcr.io/distroless/static:nonroot
 FROM --platform=${BUILDPLATFORM} ${BUILDER_IMAGE} AS builder
 
