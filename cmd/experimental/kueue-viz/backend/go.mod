@@ -1,6 +1,6 @@
 module kueue-viz
 
-go 1.26.3
+go 1.26.7
 
 require (
 	github.com/gin-gonic/gin v1.10.0
