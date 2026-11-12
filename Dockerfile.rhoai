@@ -2,7 +2,7 @@ ARG GOLANG_IMAGE=registry-proxy.engineering.redhat.com/rh-osbs/openshift-golang-
 # Start of Go versioning workaround for lack of go-toolset for version 1.23
 FROM ${GOLANG_IMAGE} AS golang
 
-FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
+FROM registry.access.redhat.com/ubi9/ubi:9.8@sha256:87f66688da4e206d5a1877088626c542288a5ccd97898cf363b588d57817e6be AS builder
 
 ARG GOLANG_VERSION=1.24.13
 
@@ -34,7 +34,7 @@ COPY . .
 # Build
 RUN make build GO_BUILD_ENV='CGO_ENABLED=1 GOOS=linux'
 
-FROM registry.access.redhat.com/ubi9/ubi:latest
+FROM registry.access.redhat.com/ubi9/ubi:9.8@sha256:87f66688da4e206d5a1877088626c542288a5ccd97898cf363b588d57817e6be
 
 WORKDIR /
 USER root
